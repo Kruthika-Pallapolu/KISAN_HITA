@@ -56,9 +56,9 @@ test('3. Fresh session & media initialization: video starts loading immediately 
   assert.match(component, /video\.readyState === 0/);
   assert.match(component, /video\.load\(\)/);
 
-  // Declarative attributes
-  assert.match(component, /autoPlay/);
-  assert.match(component, /loop/);
+  // Declarative attributes: strictly scroll-controlled, no autonomous autoplay or looping
+  assert.doesNotMatch(component, /autoPlay/);
+  assert.doesNotMatch(component, /loop/);
   assert.match(component, /muted/);
   assert.match(component, /playsInline/);
   assert.match(component, /preload="metadata"/);

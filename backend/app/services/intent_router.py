@@ -35,7 +35,15 @@ for _loc in WeatherService.get_supported_locations():
         _aliases = {_d_name.casefold()}
         for _lang_dict in _LOCATION_TRANSLATIONS.values():
             if _d_name in _lang_dict:
-                _aliases.add(_lang_dict[_d_name].strip().casefold())
+                loc_name = _lang_dict[_d_name].strip().casefold()
+                _aliases.add(loc_name)
+                if loc_name.endswith("\u0bcd") and len(loc_name) > 3:
+                    _aliases.add(loc_name[:-1])
+                if (loc_name.endswith("\u0cc1") or loc_name.endswith("\u0c41")) and len(loc_name) > 3:
+                    _aliases.add(loc_name[:-1])
+                for chillu, base in (("ർ", "ര"), ("ൽ", "ല"), ("ൾ", "ള"), ("ൺ", "ണ"), ("ൻ", "ന")):
+                    if loc_name.endswith(chillu) and len(loc_name) > 2:
+                        _aliases.add(loc_name[:-1] + base)
         _DISTRICT_ALIASES.append((_d_name, _s_name, sorted(_aliases, key=len, reverse=True)))
 
 _seen_states = set()
@@ -219,7 +227,7 @@ def _cotton_pest_education_fallback(language: str) -> str:
 # Multilingual keywords and intent patterns across 7 languages
 WEATHER_KEYWORDS = [
     "weather", "rain", "rainfall", "temperature", "forecast", "will it rain", "weather tomorrow",
-    "వాతావరణం", "వర్షం", "వాన", "రేపు వర్షం", "మంచు",
+    "వాతావరణం", "వాతావరణ", "వర్షం", "వాన", "రేపు వర్షం", "మంచు", "ఉష్ణోగ్రత",
     "मौसम", "बारिश", "बरसात", "तापमान", "कल बारिश",
     "வானிலை", "மழை", "வெப்பநிலை", "நாளை மழை",
     "ಹವಾಮಾನ", "ಮಳೆ", "ತಾಪಮಾನ", "ನಾಳೆ ಮಳೆ",

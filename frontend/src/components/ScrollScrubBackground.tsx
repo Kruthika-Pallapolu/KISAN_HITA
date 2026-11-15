@@ -98,8 +98,6 @@ export const ScrollScrubBackground: React.FC = () => {
         className="scroll-scrub-background__video"
         src={VIDEO_URL}
         poster={POSTER_URL}
-        autoPlay
-        loop
         muted
         playsInline
         preload="metadata"

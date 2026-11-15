@@ -187,8 +187,12 @@ _forecast_cache: Dict[Tuple[float, float], Dict[str, Any]] = OrderedDict()
 
 
 async def _get_json(url: str, params: Optional[dict] = None) -> Any:
+    headers = {
+        "User-Agent": "KisanHita/2.0 (Agricultural AI Assistant; Non-Commercial Educational; +https://github.com/Kruthika-Pallapolu/KISAN_HITA)",
+        "Accept": "application/json",
+    }
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
             resp = await client.get(url, params=params)
             if resp.status_code != 200:
                 raise WeatherError("weather_provider_unavailable", f"Open-Meteo returned HTTP {resp.status_code}", 503)
@@ -232,17 +236,18 @@ async def resolve_location(district: str, state: Optional[str] = None) -> dict:
     if cache_key in _geocode_cache:
         return _geocode_cache[cache_key]
 
-    # Geocoding API lookup
-    url = OPEN_METEO_GEOCODING_URL
-    params = {"name": canonical_district_name, "count": 10, "language": "en", "format": "json"}
-    data = await _get_json(url, params)
-
-    candidates = data.get("results") if isinstance(data, dict) else (data if isinstance(data, list) else None)
-    if candidates is None:
-        candidates = []
+    # Geocoding API lookup with reliable verified registry fallback
+    candidates = None
+    try:
+        url = OPEN_METEO_GEOCODING_URL
+        params = {"name": canonical_district_name, "count": 10, "language": "en", "format": "json"}
+        data = await _get_json(url, params)
+        candidates = data.get("results") if isinstance(data, dict) else (data if isinstance(data, list) else None)
+    except Exception as geo_exc:
+        logger.warning("Geocoding lookup failed for %s, %s: %s; using verified registry", canonical_district_name, canonical_state_name, geo_exc)
 
     if not candidates:
-        # Empty results -> fallback to verified registry coordinates
+        # Empty results or geocoder network error -> fallback to verified registry coordinates
         verified_info = _weather_supported_districts[supp_key]
         res = {
             "district": canonical_district_name,
