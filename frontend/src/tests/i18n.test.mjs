@@ -6,6 +6,7 @@ import { supplementalTranslations } from '../i18n/supplementalTranslations.ts';
 import { cropHealthCopy } from '../i18n/cropHealth.ts';
 import { cropAdviceAuditContent, localizeCropAdvice } from '../i18n/cropAdvisory.ts';
 import { assistantQuestionSuggestions } from '../i18n/assistantQuestions.ts';
+import { weatherVoiceCopy, WEATHER_COPY_KEYS } from '../i18n/weatherVoice.ts';
 
 test('Verify all 7 supported languages are defined', () => {
   const expectedCodes = ['te', 'en', 'hi', 'ta', 'kn', 'ml', 'mr'];
@@ -21,8 +22,15 @@ test('Base translation dictionaries and supplemental translation keys are comple
   const codes = ['te', 'en', 'hi', 'ta', 'kn', 'ml', 'mr'];
   const keys = Object.keys(translations.en).sort();
   for (const code of codes) assert.deepEqual(Object.keys(translations[code]).sort(), keys, `Base translation keys are incomplete for ${code}`);
-  for (const code of codes) { assert.equal(Object.hasOwn(translations[code], 'navWeather'), false); assert.equal(Object.hasOwn(translations[code], 'weatherTitle'), false); }
+  for (const code of codes) { assert.equal(Object.hasOwn(weatherVoiceCopy[code], 'navWeather'), true); assert.equal(Object.hasOwn(weatherVoiceCopy[code], 'weatherTitle'), true); }
   for (const code of codes) assert.deepEqual(Object.keys(supplementalTranslations[code]).sort(), Object.keys(supplementalTranslations.en).sort(), `Supplemental translation keys are incomplete for ${code}`);
+});
+
+test('weather and local wake assistant strings are complete in all seven languages', () => {
+  for (const code of ['te','en','hi','ta','kn','ml','mr']) {
+    assert.deepEqual(Object.keys(weatherVoiceCopy[code]).sort(), [...WEATHER_COPY_KEYS].sort(), `${code} weather/wake copy is incomplete`);
+    for (const key of WEATHER_COPY_KEYS) assert.ok(weatherVoiceCopy[code][key].trim(), `${code}.${key} is empty`);
+  }
 });
 
 test('all seven languages retain the regular assistant navigation and remove wake-listening copy', () => {

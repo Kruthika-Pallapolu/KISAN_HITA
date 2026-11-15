@@ -3,6 +3,7 @@
  * Snapshot: 2026-09-23; retrieved 2026-11-06. Selectors stay available offline.
  */
 import adminDirectory from '../data/indiaAdminLgd.json' with { type: 'json' };
+import weatherLocations from '../data/weatherSupportedLocations.json' with { type: 'json' };
 
 export interface StateInfo {
   code: string;
@@ -34,10 +35,38 @@ export const DISTRICTS: DistrictInfo[] = adminDirectory.districts.map((district)
   aliases: district.aliases,
 }));
 
+function normalizePlaceName(value: string): string {
+  return (value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/\b(district|dist\.?|state|union territory)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+const STATE_ALIASES: Record<string, string> = {
+  'nct of delhi': 'Delhi',
+  'national capital territory of delhi': 'Delhi',
+  'orissa': 'Odisha',
+  'pondicherry': 'Puducherry',
+  'uttaranchal': 'Uttarakhand',
+  'jammu and kashmir': 'Jammu And Kashmir',
+  'andaman and nicobar islands': 'Andaman And Nicobar Islands',
+  'dadra and nagar haveli': 'The Dadra And Nagar Haveli And Daman And Diu',
+  'daman and diu': 'The Dadra And Nagar Haveli And Daman And Diu',
+  'dadra and nagar haveli and daman and diu': 'The Dadra And Nagar Haveli And Daman And Diu',
+  'chhatisgarh': 'Chhattisgarh',
+  'chhattisgarh': 'Chhattisgarh',
+};
+
 export function getState(codeOrName: string): StateInfo | undefined {
   const norm = normalizePlaceName(codeOrName);
   const legacyCodes: Record<string, string> = { ap: 'Andhra Pradesh', ts: 'Telangana', ka: 'Karnataka', tn: 'Tamil Nadu', kl: 'Kerala', mh: 'Maharashtra', gj: 'Gujarat', mp: 'Madhya Pradesh', hr: 'Haryana', pb: 'Punjab' };
-  const name = normalizePlaceName(legacyCodes[norm] || norm);
+  const alias = STATE_ALIASES[norm];
+  const name = normalizePlaceName(alias || legacyCodes[norm] || norm);
   return STATES.find((state) => normalizePlaceName(state.code) === norm || normalizePlaceName(state.name) === name);
 }
 
@@ -66,30 +95,6 @@ export function getStateForDistrict(districtName: string): StateInfo | undefined
     || item.aliases?.some((alias) => normalizePlaceName(alias) === norm));
   return district ? STATES.find((state) => state.code === district.stateCode) : undefined;
 }
-
-function normalizePlaceName(value: string): string {
-  return (value || '')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/&/g, ' and ')
-    .replace(/\b(district|dist\.?|state|union territory)\b/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .replace(/\s+/g, ' ');
-}
-
-const STATE_ALIASES: Record<string, string> = {
-  'nct of delhi': 'Delhi',
-  'national capital territory of delhi': 'Delhi',
-  'orissa': 'Odisha',
-  'pondicherry': 'Puducherry',
-  'uttaranchal': 'Uttarakhand',
-  'jammu and kashmir': 'Jammu And Kashmir',
-  'andaman and nicobar islands': 'Andaman And Nicobar Islands',
-  'dadra and nagar haveli': 'Dadra And Nagar Haveli And Daman And Diu',
-  'daman and diu': 'Dadra And Nagar Haveli And Daman And Diu',
-};
 
 function matchState(rawName: string): StateInfo | undefined {
   const raw = normalizePlaceName(rawName);
@@ -128,7 +133,7 @@ export interface GeolocationResult {
 /**
  * Requests coordinates only after a user action, reverse-geocodes through
  * Nominatim, and returns canonical names with in-memory coordinates for an
- * exact location-aware request. Callers must not persist the coordinates.
+ * exact weather request. Callers must not persist the coordinates.
  * If the geocoder cannot resolve an exact district, nothing is guessed.
  */
 export async function detectCurrentLocation(): Promise<GeolocationResult> {
@@ -191,4 +196,52 @@ export async function detectCurrentLocation(): Promise<GeolocationResult> {
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+// Verified weather-supported locations mapping (309 verified supported districts across 15 states)
+const verifiedSupportedDistrictsMap = new Map<string, Set<string>>();
+for (const state of weatherLocations.states) {
+  const normState = normalizePlaceName(state.name);
+  const verifiedNames = new Set<string>();
+  for (const d of state.districts) {
+    if (d.verified) {
+      verifiedNames.add(normalizePlaceName(d.name));
+    }
+  }
+  if (verifiedNames.size > 0) {
+    verifiedSupportedDistrictsMap.set(normState, verifiedNames);
+  }
+}
+
+export const WEATHER_STATES: StateInfo[] = STATES.filter((state) =>
+  verifiedSupportedDistrictsMap.has(normalizePlaceName(state.name))
+);
+
+export function getWeatherDistrictsForState(stateCodeOrName: string): DistrictInfo[] {
+  if (!stateCodeOrName || stateCodeOrName === 'All' || stateCodeOrName === 'All States') return [];
+  const state = getState(stateCodeOrName);
+  if (!state) return [];
+  const verifiedNames = verifiedSupportedDistrictsMap.get(normalizePlaceName(state.name));
+  if (!verifiedNames) return [];
+  return DISTRICTS.filter(
+    (district) =>
+      district.stateCode === state.code &&
+      (verifiedNames.has(normalizePlaceName(district.name)) ||
+        verifiedNames.has(normalizePlaceName(district.id)))
+  );
+}
+
+export function isWeatherSupportedDistrict(districtName: string, stateCodeOrName: string): boolean {
+  const state = getState(stateCodeOrName);
+  if (!state) return false;
+  const verifiedNames = verifiedSupportedDistrictsMap.get(normalizePlaceName(state.name));
+  if (!verifiedNames) return false;
+  const norm = normalizePlaceName(districtName);
+  if (verifiedNames.has(norm)) return true;
+  return DISTRICTS.some(
+    (d) =>
+      d.stateCode === state.code &&
+      verifiedNames.has(normalizePlaceName(d.name)) &&
+      (normalizePlaceName(d.id) === norm || d.aliases?.some((alias) => normalizePlaceName(alias) === norm))
+  );
 }

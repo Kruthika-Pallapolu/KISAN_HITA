@@ -5,7 +5,7 @@ import { Bot } from 'lucide-react';
 import { KISAN_HITA_NAME } from '../services/productIdentity';
 
 export const PersistentAssistantBar: React.FC = () => {
-  const { toggleAssistant, isOpen } = useAssistant();
+  const { toggleAssistant, isOpen, assistantName } = useAssistant();
   const { t } = useLanguage();
 
   // If the full modal is already open, hide the floating bar to prevent visual redundancy
@@ -76,7 +76,7 @@ export const PersistentAssistantBar: React.FC = () => {
               overflow: 'hidden',
               textOverflow: 'ellipsis'
             }}>
-              {KISAN_HITA_NAME}
+              {assistantName || KISAN_HITA_NAME}
             </div>
             <div style={{
               fontSize: '0.74rem',

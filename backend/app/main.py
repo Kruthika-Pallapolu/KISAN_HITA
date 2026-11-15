@@ -16,6 +16,7 @@ from .routers import (
     crop_health,
     market_prices,
     voice,
+    weather,
     settings as settings_router,
     authentication,
 )
@@ -25,7 +26,7 @@ from .routers import (
 async def lifespan(app: FastAPI):
     # One reusable connection pool for outbound Timbre requests.
     app.state.gnani_tts_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(15.0, connect=5.0),
+        timeout=httpx.Timeout(60.0, connect=5.0),
         limits=httpx.Limits(
             max_connections=20,
             max_keepalive_connections=10,
@@ -56,13 +57,15 @@ app.add_middleware(
 )
 
 # Include all module routers
+app.include_router(authentication.router)
 app.include_router(assistant.router)
 app.include_router(crop_advisor.router)
 app.include_router(crop_health.router)
 app.include_router(market_prices.router)
 app.include_router(voice.router)
 app.include_router(settings_router.router)
-app.include_router(authentication.router)
+app.include_router(weather.router)
+
 
 
 @app.get("/api/health")
@@ -94,7 +97,7 @@ def readiness_check(response: Response):
         "database": "connected" if db_ok else "unreachable",
         "storage": "writable" if storage_ok else "read_only_or_error",
         "gemini_configured": gemini_ready,
-        "gnani_live_enabled": settings.GNANI_LIVE_ENABLED,
+        "gnani_live_enabled": bool(settings.GNANI_LIVE_ENABLED and settings.GNANI_ALLOW_PAID_LIVE_CALLS),
         "app": settings.APP_NAME,
         "version": settings.APP_VERSION,
         "timestamp": datetime.now(timezone.utc).isoformat(),

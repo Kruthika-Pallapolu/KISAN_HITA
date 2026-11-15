@@ -3,6 +3,7 @@ import base64
 import binascii
 import io
 import logging
+import re
 import time
 import warnings
 from typing import Optional, Dict, Any, List

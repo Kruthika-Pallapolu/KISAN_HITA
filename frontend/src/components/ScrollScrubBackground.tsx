@@ -46,6 +46,9 @@ export const ScrollScrubBackground: React.FC = () => {
 
     const runtime = new ScrollScrubRuntime({
       video,
+      events: window,
+      visibilityEvents: document,
+      isVisible: () => document.visibilityState === 'visible',
       readProgress,
       mobile: () => mobileQuery.matches,
       reducedMotion: () => reducedMotionQuery.matches,

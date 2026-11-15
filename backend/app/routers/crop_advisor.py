@@ -12,6 +12,7 @@ async def get_crop_recommendations(req: CropAdvisorRequest, account_id: str = De
         water=req.water_availability,
         season=req.growing_season,
         district=req.district,
-        state=req.state
+        state=req.state,
+        language=req.language
     )
 

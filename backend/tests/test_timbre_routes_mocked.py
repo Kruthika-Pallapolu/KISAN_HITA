@@ -49,6 +49,12 @@ class TestTimbreRoutesMocked(unittest.TestCase):
     def setUpClass(cls):
         cls.client = authenticated_client(app)
 
+    def setUp(self):
+        from app.database import get_db_connection
+        conn = get_db_connection()
+        with conn:
+            conn.execute("DELETE FROM api_rate_limits")
+
     def test_all_seven_languages_use_vasudha_without_network(self):
         provider = FakeTimbreProvider()
         languages = ["te", "en", "hi", "ta", "kn", "ml", "mr"]

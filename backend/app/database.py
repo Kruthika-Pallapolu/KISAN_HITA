@@ -206,6 +206,10 @@ def cleanup_guest_session_data(session_id: str) -> None:
         if conversation_ids:
             placeholders = ",".join("?" for _ in conversation_ids)
             conn.execute(
+                f"DELETE FROM messages WHERE conversation_id IN ({placeholders})",
+                conversation_ids,
+            )
+            conn.execute(
                 f"DELETE FROM conversation_sessions WHERE conversation_id IN ({placeholders})",
                 conversation_ids,
             )
@@ -382,6 +386,13 @@ def conversation_exists(conversation_id: str) -> bool:
     row = conn.execute("SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
     conn.close()
     return row is not None
+
+
+def get_conversation_language(conversation_id: str) -> Optional[str]:
+    conn = get_db_connection()
+    row = conn.execute("SELECT language FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+    conn.close()
+    return row["language"] if row else None
 
 
 def conversation_belongs_to_user(conversation_id: str, owner_id: str) -> bool:

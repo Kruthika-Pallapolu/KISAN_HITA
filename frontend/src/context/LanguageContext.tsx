@@ -3,6 +3,7 @@ import { SupportedLanguage, translations, LANGUAGES, LanguageInfo } from '../i18
 import { supplementalTranslations } from '../i18n/supplementalTranslations';
 import { readLanguagePreference, saveLanguagePreference } from '../services/languagePreference';
 import { getBrowserSessionMode } from '../services/sessionMode';
+import { weatherVoiceCopy } from '../i18n/weatherVoice';
 
 interface LanguageContextType {
   language: SupportedLanguage;
@@ -48,7 +49,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const t = (key: string): string => {
     const langDict = translations[language] || translations['en'];
-    if (langDict[key] || supplementalTranslations[language]?.[key]) return langDict[key] || supplementalTranslations[language][key];
+    if (langDict[key] || supplementalTranslations[language]?.[key] || weatherVoiceCopy[language]?.[key]) return langDict[key] || supplementalTranslations[language]?.[key] || weatherVoiceCopy[language][key];
     if (language !== 'en' && translations['en'][key]) {
       if ((import.meta as ImportMeta & { env: { DEV: boolean } }).env.DEV) console.warn(`[i18n] Missing '${key}' for '${language}'; showing English fallback.`);
       return translations['en'][key];

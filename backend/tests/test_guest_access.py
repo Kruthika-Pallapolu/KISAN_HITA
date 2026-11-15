@@ -20,12 +20,52 @@ class TestGuestAccess(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.previous_db = settings.DATABASE_PATH
+        self.previous_gemini = getattr(settings, "GEMINI_ENABLED", True)
         settings.DATABASE_PATH = os.path.join(self.temp_dir.name, "guest.sqlite")
+        settings.GEMINI_ENABLED = False
         init_db()
 
     def tearDown(self):
         settings.DATABASE_PATH = self.previous_db
+        settings.GEMINI_ENABLED = self.previous_gemini
         self.temp_dir.cleanup()
+
+    def test_guest_creation_and_session_retrieval_flow(self):
+        with TestClient(app) as client:
+            # 1. Before guest entry: no session
+            initial = client.get("/api/auth/session")
+            self.assertEqual(initial.status_code, 200)
+            self.assertEqual(initial.json()["mode"], "none")
+
+            # 2. Start guest access
+            created = client.post("/api/auth/guest")
+            self.assertEqual(created.status_code, 200, created.text)
+            guest_payload = created.json()
+            self.assertEqual(guest_payload["mode"], "guest")
+            context_id = guest_payload["context_id"]
+            self.assertTrue(context_id)
+            self.assertTrue(client.cookies.get("kisan_session"))
+
+            # 3. Session retrieval on page refresh
+            session = client.get("/api/auth/session")
+            self.assertEqual(session.status_code, 200)
+            self.assertEqual(session.json()["mode"], "guest")
+            self.assertEqual(session.json()["context_id"], context_id)
+
+            # 4. Subsequent guest call preserves the existing guest session
+            second = client.post("/api/auth/guest")
+            self.assertEqual(second.status_code, 200)
+            self.assertEqual(second.json()["context_id"], context_id)
+
+            # 5. Ending guest session
+            ended = client.post("/api/auth/guest/end")
+            self.assertEqual(ended.status_code, 200)
+            self.assertEqual(ended.json()["mode"], "none")
+
+            # 6. Session after exit is none
+            after_exit = client.get("/api/auth/session")
+            self.assertEqual(after_exit.status_code, 200)
+            self.assertEqual(after_exit.json()["mode"], "none")
 
     def guest(self):
         client = TestClient(app)
@@ -106,13 +146,11 @@ class TestGuestAccess(unittest.TestCase):
             self.assertNotIn("api_key", voice_config.json())
             self.assertEqual(client.post("/api/auth/logout").status_code, 401)
             self.assertEqual(client.get("/api/auth/me").json()["authenticated"], False)
-            # This machine has a verified local English system voice. Assert
-            # that guest TTS returns actual audio bytes, never an empty success.
+            # Disabled Timbre must not fall back to local or browser-generated audio.
             tts = client.post("/api/voice/tts", json={"text": "Hello farmer", "language": "en"})
-            self.assertEqual(tts.status_code, 200, tts.text)
-            audio = base64.b64decode(tts.json()["audio_base64"])
-            self.assertGreaterEqual(len(audio), 44)
-            self.assertFalse(tts.json()["is_mock"])
+            self.assertEqual(tts.status_code, 503)
+            self.assertIn("GNANI_LIVE_ENABLED", tts.json()["detail"])
+            self.assertNotIn("audio_base64", tts.json())
 
     def test_guest_sessions_are_isolated_from_each_other_and_accounts(self):
         first, first_context = self.guest()
@@ -220,3 +258,55 @@ class TestGuestAccess(unittest.TestCase):
                 response = client.post("/api/assistant/chat", json={"message": "Hello", "language": language})
                 self.assertEqual(response.status_code, 200, f"{language}: {response.text}")
                 self.assertEqual(response.json()["language"], language)
+
+    def test_expired_guest_cleanup_deletes_messages_and_preserves_active_sessions(self):
+        first, _ = self.guest()
+        second, _ = self.guest()
+
+        # Both guests engage in conversations that add messages
+        conv_first = "guest_to_expire_conv"
+        conv_second = "guest_active_conv"
+
+        res1 = first.post("/api/assistant/chat", json={
+            "message": "First message for expired guest", "conversation_id": conv_first, "language": "en",
+        })
+        self.assertEqual(res1.status_code, 200, res1.text)
+
+        res2 = second.post("/api/assistant/chat", json={
+            "message": "Message for active guest", "conversation_id": conv_second, "language": "en",
+        })
+        self.assertEqual(res2.status_code, 200, res2.text)
+
+        # Verify messages exist in DB for both
+        conn = get_db_connection()
+        msg_count_first = conn.execute("SELECT count(*) FROM messages WHERE conversation_id = ?", (conv_first,)).fetchone()[0]
+        msg_count_second = conn.execute("SELECT count(*) FROM messages WHERE conversation_id = ?", (conv_second,)).fetchone()[0]
+        self.assertGreater(msg_count_first, 0)
+        self.assertGreater(msg_count_second, 0)
+
+        # Force expire first guest session
+        token = first.cookies.get("kisan_session")
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        conn.execute(
+            "UPDATE browser_sessions SET expires_at = ? WHERE session_id = ?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat(), digest),
+        )
+        conn.commit()
+        conn.close()
+
+        # Create a third guest session which triggers cleanup_expired_guest_data()
+        third, _ = self.guest()
+
+        # Verify first guest's conversation and messages were cleaned up
+        conn = get_db_connection()
+        self.assertIsNone(conn.execute("SELECT 1 FROM browser_sessions WHERE session_id = ?", (digest,)).fetchone())
+        self.assertIsNone(conn.execute("SELECT 1 FROM conversations WHERE id = ?", (conv_first,)).fetchone())
+        self.assertEqual(conn.execute("SELECT count(*) FROM messages WHERE conversation_id = ?", (conv_first,)).fetchone()[0], 0)
+
+        # Verify second guest's session, conversation, and messages are completely preserved
+        token_second = second.cookies.get("kisan_session")
+        digest_second = hashlib.sha256(token_second.encode()).hexdigest()
+        self.assertIsNotNone(conn.execute("SELECT 1 FROM browser_sessions WHERE session_id = ?", (digest_second,)).fetchone())
+        self.assertIsNotNone(conn.execute("SELECT 1 FROM conversations WHERE id = ?", (conv_second,)).fetchone())
+        self.assertGreater(conn.execute("SELECT count(*) FROM messages WHERE conversation_id = ?", (conv_second,)).fetchone()[0], 0)
+        conn.close()

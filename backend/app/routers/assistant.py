@@ -10,6 +10,8 @@ from ..database import (
     get_conversation_history,
     clear_conversation_history,
     get_conversation_session,
+    clear_conversation_session,
+    get_conversation_language,
     conversation_belongs_to_user,
 )
 from ..models.schemas import ChatRequest, ChatResponse
@@ -57,7 +59,16 @@ async def chat_with_assistant(
         enforce_rate_limit(None, "assistant-image", 4, 60, owner_id)
         enforce_rate_limit(http_request, "assistant-image-ip", 12, 60)
     try:
-        history = get_conversation_history(conversation_id, owner_id=owner_id)
+        # Check if conversation language has changed
+        existing_lang = get_conversation_language(conversation_id)
+        req_lang = (request.language or "en")[:2].lower()
+        if existing_lang and existing_lang[:2].lower() != req_lang:
+            logger.info("Language switch detected for conversation %s: %s -> %s. Invalidate cache/session.", conversation_id, existing_lang, req_lang)
+            clear_conversation_session(conversation_id)
+            history = []
+        else:
+            history = get_conversation_history(conversation_id, owner_id=owner_id)
+
         save_conversation_message(
             conversation_id=conversation_id,
             sender="user",
@@ -65,6 +76,10 @@ async def chat_with_assistant(
             language=request.language,
             owner_id=owner_id,
         )
+        # Validate that the message is not empty or whitespace-only before proceeding.
+        if not request.message or not request.message.strip():
+            raise HTTPException(status_code=400, detail="Message cannot be empty.")
+        # After validation, process the user query.
         response = await AssistantOrchestrator.process_user_query(
             message=request.message,
             conversation_id=conversation_id,

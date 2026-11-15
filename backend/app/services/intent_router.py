@@ -15,6 +15,69 @@ from .market_service import MarketPriceService
 from .market_provider import MarketProviderError
 from .gemini_service import GeminiAIService
 from .crop_health_localization import format_assistant_crop_health_reply
+from .weather_service import WeatherService, WeatherError, get_forecast, _LOCATION_TRANSLATIONS
+from .localization import localize, localize_safe
+
+# Helper functions to locate districts and states in user text using WeatherService data
+from typing import List, Tuple
+
+# Pre-build multilingual location aliases for fast matching
+_DISTRICT_ALIASES: List[Tuple[str, str, List[str]]] = []
+_STATE_ALIASES: List[Tuple[str, List[str]]] = []
+
+_seen_dist_keys = set()
+for _loc in WeatherService.get_supported_locations():
+    _d_name = _loc.get("name", "")
+    _s_name = _loc.get("region", "")
+    _k = (_d_name, _s_name)
+    if _k not in _seen_dist_keys:
+        _seen_dist_keys.add(_k)
+        _aliases = {_d_name.casefold()}
+        for _lang_dict in _LOCATION_TRANSLATIONS.values():
+            if _d_name in _lang_dict:
+                _aliases.add(_lang_dict[_d_name].strip().casefold())
+        _DISTRICT_ALIASES.append((_d_name, _s_name, sorted(_aliases, key=len, reverse=True)))
+
+_seen_states = set()
+for _loc in WeatherService.get_supported_locations():
+    _s_name = _loc.get("region", "")
+    if _s_name and _s_name not in _seen_states:
+        _seen_states.add(_s_name)
+        _aliases = {_s_name.casefold()}
+        for _lang_dict in _LOCATION_TRANSLATIONS.values():
+            if _s_name in _lang_dict:
+                _aliases.add(_lang_dict[_s_name].strip().casefold())
+        _STATE_ALIASES.append((_s_name, sorted(_aliases, key=len, reverse=True)))
+
+
+def infer_weather_state(district_name: str) -> Optional[str]:
+    d_clean = (district_name or "").strip().casefold()
+    for loc in WeatherService.get_supported_locations():
+        if loc.get("name", "").casefold() == d_clean:
+            return loc.get("region")
+    return None
+
+
+def match_text_location(text: str) -> List[Tuple[str, str]]:
+    """Return list of (district, state) tuples whose district name appears in *text*.
+    Checks both English names and localized translations across all supported languages.
+    """
+    txt = (text or "").casefold()
+    matches: List[Tuple[str, str]] = []
+    for d_name, s_name, aliases in _DISTRICT_ALIASES:
+        if any(alias in txt for alias in aliases if len(alias) >= 3):
+            matches.append((d_name, s_name))
+    return matches
+
+def match_states_in_text(text: str) -> List[str]:
+    """Return unique list of state names that appear in *text* across all supported languages."""
+    txt = (text or "").casefold()
+    states: List[str] = []
+    for s_name, aliases in _STATE_ALIASES:
+        if any(alias in txt for alias in aliases if len(alias) >= 3):
+            states.append(s_name)
+    return states
+
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +217,7 @@ def _cotton_pest_education_fallback(language: str) -> str:
     return COTTON_PEST_EDUCATION.get((language or "en")[:2].lower(), COTTON_PEST_EDUCATION["en"])
 
 # Multilingual keywords and intent patterns across 7 languages
-UNSUPPORTED_FORECAST_KEYWORDS = [
+WEATHER_KEYWORDS = [
     "weather", "rain", "rainfall", "temperature", "forecast", "will it rain", "weather tomorrow",
     "వాతావరణం", "వర్షం", "వాన", "రేపు వర్షం", "మంచు",
     "मौसम", "बारिश", "बरसात", "तापमान", "कल बारिश",
@@ -163,6 +226,7 @@ UNSUPPORTED_FORECAST_KEYWORDS = [
     "കാലാവസ്ഥ", "മഴ", "താപനില", "നാളെ മഴ",
     "हवामान", "पाऊस", "तापमान", "उद्या पाऊस",
 ]
+UNSUPPORTED_FORECAST_KEYWORDS = WEATHER_KEYWORDS
 
 
 def is_unsupported_forecast_request(text: str) -> bool:
@@ -174,6 +238,92 @@ def is_unsupported_forecast_request(text: str) -> bool:
         elif keyword in lower:
             return True
     return False
+
+
+def extract_weather_district(text: str, state: Optional[str] = None) -> Optional[str]:
+    matches = match_text_location(text)
+    if not matches:
+        return None
+    if state:
+        filtered = [m for m in matches if m[1].casefold() == state.casefold()]
+        if len(filtered) == 1:
+            return filtered[0][0]
+    return matches[0][0] if len(matches) == 1 else None
+
+
+def extract_weather_state(text: str) -> Optional[str]:
+    states = match_states_in_text(text)
+    if states:
+        return states[0] if len(set(states)) == 1 else None
+    matches = match_text_location(text)
+    found = {state for _, state in matches}
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def weather_location_prompt(language: str) -> str:
+    return {
+        "en": "Which Indian state and district should I check? I need your location to fetch a real forecast.",
+        "te": "నిజమైన వాతావరణ సూచన కోసం మీ రాష్ట్రం, జిల్లాను చెప్పండి.",
+        "hi": "वास्तविक मौसम पूर्वानुमान देखने के लिए अपना राज्य और जिला बताइए।",
+        "ta": "உண்மையான வானிலை முன்னறிவிப்பைப் பெற உங்கள் மாநிலம் மற்றும் மாவட்டத்தைச் சொல்லுங்கள்.",
+        "kn": "ನೈಜ ಹವಾಮಾನ ಮುನ್ಸೂಚನೆಗಾಗಿ ನಿಮ್ಮ ರಾಜ್ಯ ಮತ್ತು ಜಿಲ್ಲೆಯನ್ನು ತಿಳಿಸಿ.",
+        "ml": "യഥാർത്ഥ കാലാവസ്ഥാ പ്രവചനം ലഭിക്കാൻ നിങ്ങളുടെ സംസ്ഥാനവും ജില്ലയും പറയൂ.",
+        "mr": "खरा हवामान अंदाज मिळवण्यासाठी तुमचे राज्य आणि जिल्हा सांगा.",
+    }.get((language or "en")[:2], "Which Indian state and district should I check?")
+
+
+def localized_weather_error(code: str, language: str) -> str:
+    lang = (language or "en")[:2]
+    messages = {
+        "invalid_location": {"en":"That district does not match the selected state. Please check the location.","te":"ఆ జిల్లా ఎంచుకున్న రాష్ట్రానికి సరిపోలడం లేదు. దయచేసి స్థానాన్ని తనిఖీ చేయండి.","hi":"यह जिला चुने हुए राज्य से मेल नहीं खाता। कृपया स्थान जाँचें।","ta":"இந்த மாவட்டம் தேர்ந்தெடுத்த மாநிலத்துடன் பொருந்தவில்லை. இடத்தைச் சரிபார்க்கவும்.","kn":"ಆ ಜಿಲ್ಲೆ ಆಯ್ಕೆ ಮಾಡಿದ ರಾಜ್ಯಕ್ಕೆ ಹೊಂದಿಕೆಯಾಗುವುದಿಲ್ಲ. ಸ್ಥಳ ಪರಿಶೀಲಿಸಿ.","ml":"ആ ജില്ല തിരഞ്ഞെടുത്ത സംസ്ഥാനവുമായി പൊരുത്തപ്പെടുന്നില്ല. സ്ഥലം പരിശോധിക്കുക.","mr":"हा जिल्हा निवडलेल्या राज्याशी जुळत नाही. कृपया ठिकाण तपासा."},
+        "weather_coverage_unavailable": {"en":"Live weather could not be confidently matched to this district. Check the location and try again.","te":"ఈ జిల్లాకు ప్రత్యక్ష వాతావరణాన్ని నమ్మకంగా సరిపోల్చలేకపోయాం. స్థానాన్ని తనిఖీ చేసి మళ్లీ ప్రయత్నించండి.","hi":"इस जिले के लिए लाइव मौसम का भरोसेमंद मिलान नहीं मिला। स्थान जाँचकर फिर कोशिश करें।","ta":"இந்த மாவட்டத்திற்கான நேரடி வானிலையை உறுதியாகப் பொருத்த முடியவில்லை. இடத்தைச் சரிபார்த்து மீண்டும் முயலவும்.","kn":"ಈ ಜಿಲ್ಲೆಗೆ ನೈಜ ಹವಾಮಾನವನ್ನು ಖಚಿತವಾಗಿ ಹೊಂದಿಸಲಾಗಲಿಲ್ಲ. ಸ್ಥಳ ಪರಿಶೀಲಿಸಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.","ml":"ഈ ജില്ലയ്ക്ക് തത്സമയ കാലാവസ്ഥ ഉറപ്പോടെ പൊരുത്തപ്പെടുത്താനായില്ല. സ്ഥലം പരിശോധിച്ച് വീണ്ടും ശ്രമിക്കുക.","mr":"या जिल्ह्यासाठी थेट हवामानाचा खात्रीशीर मेळ मिळाला नाही. ठिकाण तपासून पुन्हा प्रयत्न करा."},
+        "weather_location_ambiguous": {"en":"More than one weather location matched. Please select a different district or try later.","te":"ఒకటి కంటే ఎక్కువ వాతావరణ స్థానాలు సరిపోలాయి. మరో జిల్లాను ఎంచుకోండి లేదా తర్వాత ప్రయత్నించండి.","hi":"एक से अधिक मौसम स्थान मेल खाते हैं। दूसरा जिला चुनें या बाद में कोशिश करें।","ta":"ஒன்றுக்கு மேற்பட்ட வானிலை இடங்கள் பொருந்தின. வேறு மாவட்டத்தைத் தேர்ந்தெடுக்கவும் அல்லது பிறகு முயலவும்.","kn":"ಒಂದಕ್ಕಿಂತ ಹೆಚ್ಚು ಹವಾಮಾನ ಸ್ಥಳಗಳು ಹೊಂದಿಕೊಂಡಿವೆ. ಬೇರೆ ಜಿಲ್ಲೆ ಆಯ್ಕೆಮಾಡಿ ಅಥವಾ ನಂತರ ಪ್ರಯತ್ನಿಸಿ.","ml":"ഒന്നിലധികം കാലാവസ്ഥാ സ്ഥലങ്ങൾ പൊരുത്തപ്പെട്ടു. മറ്റൊരു ജില്ല തിരഞ്ഞെടുക്കുക അല്ലെങ്കിൽ പിന്നീട് ശ്രമിക്കുക.","mr":"एकापेक्षा जास्त हवामान ठिकाणे जुळली. दुसरा जिल्हा निवडा किंवा नंतर प्रयत्न करा."},
+        "weather_provider_timeout": {"en":"The weather request timed out. Please try again.","te":"వాతావరణ అభ్యర్థనకు సమయం ముగిసింది. మళ్లీ ప్రయత్నించండి.","hi":"मौसम अनुरोध का समय पूरा हुआ। फिर कोशिश करें।","ta":"வானிலை கோரிக்கையின் நேரம் முடிந்தது. மீண்டும் முயலவும்.","kn":"ಹವಾಮಾನ ವಿನಂತಿಯ ಸಮಯ ಮುಗಿದಿದೆ. ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.","ml":"കാലാവസ്ഥാ അഭ്യർത്ഥനയുടെ സമയം കഴിഞ്ഞു. വീണ്ടും ശ്രമിക്കുക.","mr":"हवामान विनंतीची वेळ संपली. पुन्हा प्रयत्न करा."},
+        "weather_provider_unavailable": {"en":"Live weather is temporarily unavailable. No sample forecast is being shown.","te":"ప్రత్యక్ష వాతావరణం తాత్కాలికంగా అందుబాటులో లేదు. నమూనా సూచన చూపించడం లేదు.","hi":"लाइव मौसम अभी उपलब्ध नहीं है। कोई नमूना पूर्वानुमान नहीं दिखाया जा रहा।","ta":"நேரடி வானிலை தற்காலிகமாகக் கிடைக்கவில்லை. மாதிரி முன்னறிவிப்பு காட்டப்படவில்லை.","kn":"ನೈಜ ಹವಾಮಾನ ತಾತ್ಕಾಲಿಕವಾಗಿ ಲಭ್ಯವಿಲ್ಲ. ಮಾದರಿ ಮುನ್ಸೂಚನೆ ತೋರಿಸುತ್ತಿಲ್ಲ.","ml":"തത്സമയ കാലാവസ്ഥ താൽക്കാലികമായി ലഭ്യമല്ല. മാതൃകാ പ്രവചനം കാണിക്കുന്നില്ല.","mr":"थेट हवामान तात्पुरते उपलब्ध नाही. नमुना अंदाज दाखवला जात नाही."},
+    }
+    return messages.get(code, messages["weather_provider_unavailable"]).get(lang, messages.get(code, messages["weather_provider_unavailable"])["en"])
+
+
+_WEATHER_CONDITIONS = {
+    "en": {0:"Clear",1:"Mainly clear",2:"Partly cloudy",3:"Overcast",45:"Fog",48:"Freezing fog",51:"Light drizzle",53:"Drizzle",55:"Heavy drizzle",61:"Light rain",63:"Rain",65:"Heavy rain",71:"Light snow",73:"Snow",75:"Heavy snow",80:"Rain showers",81:"Showers",82:"Heavy showers",95:"Thunderstorm",96:"Thunderstorm with hail",99:"Severe thunderstorm"},
+    "te": {0:"ఆకాశం నిర్మలం",1:"దాదాపు నిర్మలం",2:"కొంత మేఘావృతం",3:"మేఘావృతం",45:"పొగమంచు",51:"చినుకులు",61:"తేలికపాటి వర్షం",63:"వర్షం",65:"భారీ వర్షం",80:"జల్లులు",95:"ఉరుములతో వర్షం"},
+    "hi": {0:"साफ़ आसमान",1:"मुख्यतः साफ़",2:"आंशिक बादल",3:"बादल छाए",45:"कोहरा",51:"हल्की बूंदाबांदी",61:"हल्की बारिश",63:"बारिश",65:"तेज़ बारिश",80:"बारिश की बौछार",95:"गरज के साथ बारिश"},
+    "ta": {0:"தெளிவான வானம்",1:"பெரும்பாலும் தெளிவு",2:"ஓரளவு மேகம்",3:"மேகமூட்டம்",45:"மூடுபனி",51:"லேசான தூறல்",61:"லேசான மழை",63:"மழை",65:"கனமழை",80:"மழைச் சாரல்",95:"இடியுடன் மழை"},
+    "kn": {0:"ಸ್ಪಷ್ಟ ಆಕಾಶ",1:"ಬಹುತೇಕ ಸ್ಪಷ್ಟ",2:"ಭಾಗಶಃ ಮೋಡ",3:"ಮೋಡ ಕವಿದಿದೆ",45:"ಮಂಜು",51:"ಲಘು ತುಂತುರು",61:"ಲಘು ಮಳೆ",63:"ಮಳೆ",65:"ಭಾರಿ ಮಳೆ",80:"ಮಳೆ ತುಂತುರು",95:"ಗುಡುಗು ಸಹಿತ ಮಳೆ"},
+    "ml": {0:"തെളിഞ്ഞ ആകാശം",1:"മിക്കവാറും തെളിഞ്ഞത്",2:"ഭാഗികമായി മേഘം",3:"മേഘാവൃതം",45:"മൂടൽമഞ്ഞ്",51:"ചെറിയ ചാറ്റൽ",61:"ലഘു മഴ",63:"മഴ",65:"കനത്ത മഴ",80:"മഴച്ചാറ്റൽ",95:"ഇടിമിന്നലോടുകൂടിയ മഴ"},
+    "mr": {0:"निरभ्र आकाश",1:"बहुतेक निरभ्र",2:"अंशतः ढगाळ",3:"ढगाळ",45:"धुके",51:"हलकी रिमझिम",61:"हलका पाऊस",63:"पाऊस",65:"मुसळधार पाऊस",80:"पावसाच्या सरी",95:"मेघगर्जनेसह पाऊस"},
+}
+_WEATHER_REPLY = {
+    "en": "Live forecast for {place}: {condition}, {temp}°C (feels like {feels}°C).{rain} Source: Open-Meteo. Forecasts are guidance, not official severe-weather warnings.",
+    "te": "{place}కు ప్రత్యక్ష సూచన: {condition}, {temp}°C (అనుభూతి {feels}°C).{rain} మూలం: Open-Meteo. ఇది సూచన మాత్రమే; అధికారిక తీవ్రమైన వాతావరణ హెచ్చరిక కాదు.",
+    "hi": "{place} का लाइव पूर्वानुमान: {condition}, {temp}°C (महसूस {feels}°C).{rain} स्रोत: Open-Meteo। यह मार्गदर्शन है, आधिकारिक गंभीर मौसम चेतावनी नहीं।",
+    "ta": "{place}க்கான நேரடி முன்னறிவிப்பு: {condition}, {temp}°C (உணரப்படும் வெப்பம் {feels}°C).{rain} மூலம்: Open-Meteo. இது வழிகாட்டல் மட்டுமே; அதிகாரப்பூர்வ எச்சரிக்கை அல்ல.",
+    "kn": "{place}ಗೆ ನೈಜ ಮುನ್ಸೂಚನೆ: {condition}, {temp}°C (ಅನುಭವಕ್ಕೆ {feels}°C).{rain} ಮೂಲ: Open-Meteo. ಇದು ಮಾರ್ಗದರ್ಶನ ಮಾತ್ರ; ಅಧಿಕೃತ ಎಚ್ಚರಿಕೆ ಅಲ್ಲ.",
+    "ml": "{place}-ലെ തത്സമയ പ്രവചനം: {condition}, {temp}°C (അനുഭവപ്പെടുന്നത് {feels}°C).{rain} ഉറവിടം: Open-Meteo. ഇത് മാർഗനിർദ്ദേശം മാത്രമാണ്; ഔദ്യോഗിക മുന്നറിയിപ്പല്ല.",
+    "mr": "{place} साठी थेट अंदाज: {condition}, {temp}°C (जाणवणारे {feels}°C).{rain} स्रोत: Open-Meteo. हा मार्गदर्शक अंदाज आहे; अधिकृत इशारा नाही.",
+}
+
+
+async def get_weather_forecast(*, district: str, state: str, language: str = "en", **kwargs) -> dict:
+    return await get_forecast(district=district, state=state, language=language, **kwargs)
+
+
+def format_weather_reply(data: dict[str, Any], language: str, question: str) -> str:
+    lang = (language or "en")[:2]
+    current = data["current"]
+    probabilities = data["hourly"].get("precipitation_probability", [])
+    rain_probability = max((int(value) for value in probabilities[1:25] if value is not None), default=None)
+    rain_phrases = {"en":" Rain chance in the next 24 hours: {p}%.","te":" రాబోయే 24 గంటల్లో వర్షావకాశం: {p}%.","hi":" अगले 24 घंटों में बारिश की संभावना: {p}%।","ta":" அடுத்த 24 மணி நேர மழை வாய்ப்பு: {p}%.","kn":" ಮುಂದಿನ 24 ಗಂಟೆಗಳ ಮಳೆಯ ಸಾಧ್ಯತೆ: {p}%.","ml":" അടുത്ത 24 മണിക്കൂറിലെ മഴസാധ്യത: {p}%.","mr":" पुढील २४ तासांत पावसाची शक्यता: {p}%."}
+    rain = rain_phrases[lang].format(p=rain_probability) if rain_probability is not None else ""
+    generic_condition = {"en":"Weather conditions","te":"వాతావరణ స్థితి","hi":"मौसम की स्थिति","ta":"வானிலை நிலை","kn":"ಹವಾಮಾನ ಸ್ಥಿತಿ","ml":"കാലാവസ്ഥ","mr":"हवामान स्थिती"}.get(lang, "Weather conditions")
+    condition = _WEATHER_CONDITIONS.get(lang, _WEATHER_CONDITIONS["en"]).get(int(current["weather_code"]), generic_condition)
+    raw_dist = data["location"].get("district", "")
+    raw_state = data["location"].get("state", "")
+    loc_dist = _LOCATION_TRANSLATIONS.get(lang, {}).get(raw_dist, raw_dist)
+    loc_state = _LOCATION_TRANSLATIONS.get(lang, {}).get(raw_state, raw_state)
+    place = f"{loc_dist}, {loc_state}" if loc_state else loc_dist
+    return _WEATHER_REPLY.get(lang, _WEATHER_REPLY["en"]).format(place=place, condition=condition,
+        temp=current["temperature_2m"], feels=current["apparent_temperature"], rain=rain)
 
 
 UNSUPPORTED_FORECAST_REPLIES = {
@@ -190,7 +340,7 @@ UNSUPPORTED_FORECAST_REPLIES = {
 CROP_ADVISOR_KEYWORDS = [
     # English
     "which crop", "choose crop", "choose a crop", "help me choose a crop", "help me choose a crop for", "recommend crop", "suggest crop", "crop suit",
-    "crop to grow", "what to grow", "suitable crop", "best crop", "crop for rabi",
+    "crop to grow", "what to grow", "what crops can i grow", "what crops to grow", "which crops to grow", "suitable crop", "best crop", "crop for rabi",
     "crop for kharif", "crop for summer", "crops for rabi", "crops for kharif",
     "crop selection", "recommend a crop", "crops suitable for", "which crop to sow",
     "what should i grow", "which crop is suitable", "crop recommendation",
@@ -370,6 +520,14 @@ def detect_intent(text: str) -> str:
     for kw in MARKET_PRICE_KEYWORDS:
         if kw in lower:
             return "market_prices"
+
+    # 4. Weather
+    for kw in WEATHER_KEYWORDS:
+        if kw.isascii():
+            if re.search(rf"(?<![a-z]){re.escape(kw)}(?![a-z])", lower):
+                return "weather"
+        elif kw in lower:
+            return "weather"
 
     # 5. Crop Advisor multi-word selection phrases
     for phrase in CROP_ADVISOR_KEYWORDS:
@@ -636,6 +794,35 @@ SLOT_PROMPTS = {
             "mr": "{crop_name} वर आपल्याला कोणती लक्षणे दिसत आहेत? (उदा: पाने पिवळी पडणे, चट्टे, करपा)",
             "en": "What specific symptoms are visible on your {crop_name}? (e.g. yellowing leaves, leaf curling, spots, or wilting)",
         }
+    },
+    "weather": {
+        "location": {
+            "te": "నిజమైన వాతావరణ సూచన కోసం మీ రాష్ట్రం, జిల్లాను చెప్పండి.",
+            "hi": "वास्तविक मौसम पूर्वानुमान देखने के लिए अपना राज्य और जिला बताइए।",
+            "ta": "உண்மையான வானிலை முன்னறிவிப்பைப் பெற உங்கள் மாநிலம் மற்றும் மாவட்டத்தைச் சொல்லுங்கள்.",
+            "kn": "ನೈಜ ಹವಾಮಾನ ಮುನ್ಸೂಚನೆಗಾಗಿ ನಿಮ್ಮ ರಾಜ್ಯ ಮತ್ತು ಜಿಲ್ಲೆಯನ್ನು ತಿಳಿಸಿ.",
+            "ml": "യഥാർത്ഥ കാലാവസ്ഥാ പ്രവചനം ലഭിക്കാൻ നിങ്ങളുടെ സംസ്ഥാനവും ജില്ലയും പറയൂ.",
+            "mr": "खरा हवामान अंदाज मिळवण्यासाठी तुमचे राज्य आणि जिल्हा सांगा.",
+            "en": "Which Indian state and district should I check? I need your location to fetch a real forecast.",
+        },
+        "district": {
+            "te": "{state} రాష్ట్రంలో మీ జిల్లా ఏది?",
+            "hi": "{state} राज्य में आपका जिला कौन सा है?",
+            "ta": "{state} மாநிலத்தில் உங்கள் மாவட்டம் எது?",
+            "kn": "{state} ರಾಜ್ಯದಲ್ಲಿ ನಿಮ್ಮ ಜಿಲ್ಲೆ ಯಾವುದು?",
+            "ml": "{state} സംസ്ഥാനത്തിൽ നിങ്ങളുടെ ജില്ല ഏതാണ്?",
+            "mr": "{state} राज्यात आपला जिल्हा कोणता आहे?",
+            "en": "Which district in {state} should I check?",
+        },
+        "state": {
+            "te": "{district} జిల్లా ఏ రాష్ట్రంలో ఉంది?",
+            "hi": "{district} जिला किस राज्य में है?",
+            "ta": "{district} மாவட்டம் எந்த மாநிலத்தில் உள்ளது?",
+            "kn": "{district} ಜಿಲ್ಲೆ ಯಾವ ರಾಜ್ಯದಲ್ಲಿದೆ?",
+            "ml": "{district} ജില്ല ഏത് സംസ്ഥാനത്തിലാണ്?",
+            "mr": "{district} जिल्हा कोणत्या राज्यात आहे?",
+            "en": "Which state is {district} located in?",
+        }
     }
 }
 
@@ -658,7 +845,7 @@ def get_agronomic_domain_response(query: str, language: str = "en") -> Optional[
     if lang not in ["te", "en", "hi", "ta", "kn", "ml", "mr"]:
         lang = "en"
 
-    is_chilli = any(w in q for w in ["chilli", "chili", "mirchi", "మిర్చి", "मिर्च", "மிளகாய்", "ಮೆಣಸಿನಕಾಯಿ", "മുളക്", "मिरची"])
+    is_chilli = any(w in q for w in ["chilli", "chili", "mirchi", "మిరప", "మిర్చి", "मिर्च", "மிளகாய்", "ಮೆಣಸಿನಕಾಯಿ", "മുളക്", "मिरची"])
     is_cotton = any(w in q for w in ["cotton", "patti", "పత్తి", "कपास", "பருத்தி", "ಹತ್ತಿ", "പരുത്തി", "कापूस"])
     is_paddy = any(w in q for w in ["paddy", "rice", "వరి", "ధాన్యం", "धान", "चावल", "நெல்", "அரிசி", "ಭತ್ತ", "നെല്ല്", "भात"])
 
@@ -887,30 +1074,49 @@ class AssistantOrchestrator:
                 collected_slots={}
             )
 
-        if is_unsupported_forecast_request(message):
-            return ChatResponse(
-                conversation_id=conversation_id,
-                reply_text=UNSUPPORTED_FORECAST_REPLIES.get(language, UNSUPPORTED_FORECAST_REPLIES["en"]),
-                language=language,
-                intent="general",
-                routed_feature="ask_kisan",
-                feature_data=None,
-                suggested_actions=["Which crop suits black soil?", "Check Chilli mandi prices"],
-                audio_available=False,
-                pending_workflow=None,
-            )
+        # Weather intent handling
+        if detect_intent(message) == "weather":
+            mentioned_district = extract_weather_district(message)
+            requested_state = extract_weather_state(message) or default_state
+            requested_district = mentioned_district or farmer_district
+            if requested_district and not requested_state:
+                requested_state = infer_weather_state(requested_district)
+            if not requested_district or not requested_state:
+                save_conversation_session(
+                    conversation_id,
+                    "weather",
+                    {"district": requested_district, "state": requested_state},
+                    ["location"],
+                )
+                return ChatResponse(
+                    conversation_id=conversation_id,
+                    reply_text=weather_location_prompt(language), language=language,
+                    intent="weather", routed_feature="weather", feature_data={"status": "location_required"},
+                    suggested_actions=["Select a district in Weather"], audio_available=False,
+                    pending_workflow=None,
+                    collected_slots={"district": requested_district, "state": requested_state},
+                )
+            try:
+                weather_data = await get_weather_forecast(district=requested_district, state=requested_state)
+                reply = format_weather_reply(weather_data, language, message)
+                return ChatResponse(
+                    conversation_id=conversation_id, reply_text=reply, language=language,
+                    intent="weather", routed_feature="weather", feature_data=weather_data,
+                    suggested_actions=["Open Weather"], audio_available=False,
+                )
+            except WeatherError as exc:
+                return ChatResponse(
+                    conversation_id=conversation_id, reply_text=localized_weather_error(exc.code, language), language=language,
+                    intent="weather", routed_feature="weather",
+                    feature_data={"status": "unavailable", "code": exc.code},
+                    suggested_actions=["Open Weather and select a location"], audio_available=False,
+                )
 
         # 2. Check existing conversation session
         session = get_conversation_session(conversation_id)
         session_workflow = session.get("pending_workflow")
         collected_slots = session.get("collected_slots") or {}
         missing_slots = session.get("missing_slots") or []
-        # Discard pending slot state from the retired forecast workflow.
-        if session_workflow == "weather":
-            clear_conversation_session(conversation_id)
-            session_workflow = None
-            collected_slots = {}
-            missing_slots = []
 
         # A complete new market query is a new search, even if a previous
         # interrupted market flow is waiting for its commodity. Reset stale
@@ -941,6 +1147,8 @@ class AssistantOrchestrator:
                 "commodity": extract_commodity(message) is not None,
                 "crop_name": extract_health_crop(message) is not None,
                 "symptoms": newly_detected_intent == "crop_health",
+                "location": (extract_weather_district(message) is not None or extract_weather_state(message) is not None),
+                "state": extract_weather_state(message) is not None,
             }.get(current_slot, False)
             if newly_detected_intent != "general" and not slot_value_present:
                 clear_conversation_session(conversation_id)
@@ -953,7 +1161,23 @@ class AssistantOrchestrator:
             current_missing = missing_slots[0]
 
             # Try to extract the requested slot from the user's message
-            if session_workflow == "market_prices":
+            if session_workflow == "weather":
+                st = extract_weather_state(message) or collected_slots.get("state") or default_state
+                dist = extract_weather_district(message, state=st) or collected_slots.get("district")
+                if not st and dist:
+                    st = infer_weather_state(dist)
+                if dist and st:
+                    collected_slots["district"] = dist
+                    collected_slots["state"] = st
+                    missing_slots = []
+                elif dist:
+                    collected_slots["district"] = dist
+                    missing_slots = ["state"]
+                elif st:
+                    collected_slots["state"] = st
+                    missing_slots = ["district"]
+
+            elif session_workflow == "market_prices":
                 if current_missing == "commodity":
                     comm = extract_commodity(message) or message.strip().title()
                     collected_slots["commodity"] = comm
@@ -1027,8 +1251,60 @@ class AssistantOrchestrator:
 
         # ----------------- B. EXECUTE OR INITIATE INTENT -----------------
 
+        # 1. WEATHER INTENT
+        if active_intent == "weather":
+            dist = collected_slots.get("district") or extract_weather_district(message) or farmer_district
+            st = collected_slots.get("state") or extract_weather_state(message) or default_state
+            if dist and not st:
+                st = infer_weather_state(dist)
+            if not dist or not st:
+                save_conversation_session(conversation_id, "weather", {"district": dist, "state": st}, ["location"])
+                return ChatResponse(
+                    conversation_id=conversation_id,
+                    reply_text=weather_location_prompt(language),
+                    language=language,
+                    intent="weather",
+                    routed_feature="weather",
+                    feature_data={"status": "location_required"},
+                    suggested_actions=["Select a district in Weather"],
+                    audio_available=False,
+                    pending_workflow="weather",
+                    next_slot="location",
+                    collected_slots={"district": dist, "state": st},
+                )
+            try:
+                weather_data = await get_weather_forecast(district=dist, state=st)
+                reply = format_weather_reply(weather_data, language, message)
+                clear_conversation_session(conversation_id)
+                return ChatResponse(
+                    conversation_id=conversation_id,
+                    reply_text=reply,
+                    language=language,
+                    intent="weather",
+                    routed_feature="weather",
+                    feature_data=weather_data,
+                    suggested_actions=["Open Weather"],
+                    audio_available=False,
+                    pending_workflow=None,
+                    collected_slots={"district": dist, "state": st},
+                )
+            except WeatherError as exc:
+                clear_conversation_session(conversation_id)
+                return ChatResponse(
+                    conversation_id=conversation_id,
+                    reply_text=localized_weather_error(exc.code, language),
+                    language=language,
+                    intent="weather",
+                    routed_feature="weather",
+                    feature_data={"status": "unavailable", "code": exc.code},
+                    suggested_actions=["Open Weather and select a location"],
+                    audio_available=False,
+                    pending_workflow=None,
+                    collected_slots={"district": dist, "state": st},
+                )
+
         # 2. MARKET PRICES INTENT
-        if active_intent == "market_prices":
+        elif active_intent == "market_prices":
             # Check what slots we already have
             comm = collected_slots.get("commodity") or extract_commodity(message)
             dist = collected_slots.get("district") or extract_district(message)
@@ -1185,42 +1461,48 @@ class AssistantOrchestrator:
             )
 
             district_to_pass = district
-            c_data = CropAdvisorService.get_recommendations(soil, water, season, district_to_pass, default_state)
+            c_data = CropAdvisorService.get_recommendations(soil, water, season, district_to_pass, default_state, language=language)
             feature_data = c_data.model_dump()
+
+            loc_district = localize_safe(farmer_district, language) if farmer_district else ""
+            loc_soil = localize_safe(soil, language)
+            loc_water = localize_safe(water, language)
+            loc_season = localize_safe(season, language)
+            loc_kvk = localize_safe("KVK", language)
 
             loc_context = f" in {farmer_district}" if farmer_district else ""
 
             if c_data.recommendations:
                 top_crops = ", ".join([r.crop_name for r in c_data.recommendations])
                 location_phrase = {
-                    "te": f" {farmer_district} ప్రాంతంలో" if farmer_district else "",
-                    "hi": f" {farmer_district} क्षेत्र में" if farmer_district else "",
-                    "ta": f" {farmer_district} பகுதியில்" if farmer_district else "",
-                    "kn": f" {farmer_district} ಜಿಲ್ಲೆಯಲ್ಲಿ" if farmer_district else "",
-                    "ml": f" {farmer_district} പ്രദേശത്ത്" if farmer_district else "",
-                    "mr": f" {farmer_district} परिसरात" if farmer_district else "",
+                    "te": f" {loc_district} ప్రాంతంలో" if loc_district else "",
+                    "hi": f" {loc_district} क्षेत्र में" if loc_district else "",
+                    "ta": f" {loc_district} பகுதியில்" if loc_district else "",
+                    "kn": f" {loc_district} ಜಿಲ್ಲೆಯಲ್ಲಿ" if loc_district else "",
+                    "ml": f" {loc_district} പ്രദേശത്ത്" if loc_district else "",
+                    "mr": f" {loc_district} परिसरात" if loc_district else "",
                     "en": f" in {farmer_district}" if farmer_district else "",
                 }
                 place = location_phrase.get(language, location_phrase["en"])
                 reply_templates = {
-                    "te": f"మీ{place} {soil}, {water} నీటి పరిస్థితి, {season} కాలాన్ని బట్టి {top_crops} పంటలను పరిశీలించవచ్చు. ఇవి మీ పొలానికి ధృవీకరించిన సిఫార్సులు కావు. విత్తే సమయం, నేలలోని తేమ, విత్తనాల లభ్యతను స్థానిక KVK లేదా వ్యవసాయ అధికారితో నిర్ధారించండి. కావాలంటే ఈ పంటలను పోల్చి చెప్పగలను.",
-                    "hi": f"आपके{place} {soil}, {water} की स्थिति और {season} मौसम के लिए {top_crops} पर विचार किया जा सकता है। ये आपके खेत के लिए सत्यापित सिफारिशें नहीं हैं। बुवाई का समय, मिट्टी की नमी और बीज की उपलब्धता स्थानीय KVK या कृषि अधिकारी से जाँचें। चाहें तो मैं इन विकल्पों की तुलना कर सकता हूँ।",
-                    "ta": f"உங்கள்{place} {soil}, {water} நீர் நிலை, {season} பருவத்தைப் பொறுத்து {top_crops} பயிர்களைப் பரிசீலிக்கலாம். இவை உங்கள் நிலத்திற்குச் சரிபார்க்கப்பட்ட பரிந்துரைகள் அல்ல. விதைப்பு நேரம், மண்ணின் ஈரப்பதம், விதை கிடைப்பதை உள்ளூர் KVK அல்லது வேளாண் அலுவலரிடம் உறுதிப்படுத்துங்கள். விரும்பினால் இவற்றை ஒப்பிட்டுச் சொல்லலாம்.",
-                    "kn": f"ನಿಮ್ಮ{place} {soil}, {water} ನೀರಿನ ಸ್ಥಿತಿ ಮತ್ತು {season} ಹಂಗಾಮಿಗೆ {top_crops} ಬೆಳೆಗಳನ್ನು ಪರಿಗಣಿಸಬಹುದು. ಇವು ನಿಮ್ಮ ಹೊಲಕ್ಕೆ ಪರಿಶೀಲಿತ ಶಿಫಾರಸುಗಳಲ್ಲ. ಬಿತ್ತನೆ ಸಮಯ, ಮಣ್ಣಿನ ತೇವಾಂಶ ಮತ್ತು ಬೀಜ ಲಭ್ಯತೆಯನ್ನು ಸ್ಥಳೀಯ KVK ಅಥವಾ ಕೃಷಿ ಅಧಿಕಾರಿಯಿಂದ ಖಚಿತಪಡಿಸಿಕೊಳ್ಳಿ. ಬೇಕಿದ್ದರೆ ಈ ಆಯ್ಕೆಗಳನ್ನು ಹೋಲಿಸಿ ಹೇಳುತ್ತೇನೆ.",
-                    "ml": f"നിങ്ങളുടെ{place} {soil}, {water} ജലലഭ്യത, {season} കാലം എന്നിവ കണക്കിലെടുത്ത് {top_crops} പരിഗണിക്കാം. ഇവ നിങ്ങളുടെ വയലിനായി സ്ഥിരീകരിച്ച ശുപാർശകളല്ല. വിതയ്ക്കുന്ന സമയം, മണ്ണിലെ ഈർപ്പം, വിത്തിന്റെ ലഭ്യത എന്നിവ പ്രാദേശിക KVK അല്ലെങ്കിൽ കൃഷി ഉദ്യോഗസ്ഥനുമായി ഉറപ്പാക്കുക. വേണമെങ്കിൽ ഇവ താരതമ്യം ചെയ്ത് പറയാം.",
-                    "mr": f"तुमच्या{place} {soil}, {water} पाण्याची उपलब्धता आणि {season} हंगामासाठी {top_crops} विचारात घेता येतील. या तुमच्या शेतासाठी पडताळलेल्या शिफारसी नाहीत. पेरणीची वेळ, जमिनीतील ओलावा आणि बियाण्यांची उपलब्धता स्थानिक KVK किंवा कृषी अधिकाऱ्यांकडून तपासा. हवे असल्यास मी या पर्यायांची तुलना करू शकतो.",
+                    "te": f"మీ{place} {loc_soil}, {loc_water} నీటి పరిస్థితి, {loc_season} కాలాన్ని బట్టి {top_crops} పంటలను పరిశీలించవచ్చు. ఇవి మీ పొలానికి ధృవీకరించిన సిఫార్సులు కావు. విత్తే సమయం, నేలలోని తేమ, విత్తనాల లభ్యతను స్థానిక {loc_kvk} లేదా వ్యవసాయ అధికారితో నిర్ధారించండి. కావాలంటే ఈ పంటలను పోల్చి చెప్పగలను.",
+                    "hi": f"आपके{place} {loc_soil}, {loc_water} की स्थिति और {loc_season} मौसम के लिए {top_crops} पर विचार किया जा सकता है। ये आपके खेत के लिए सत्यापित सिफारिशें नहीं हैं। बुवाई का समय, मिट्टी की नमी और बीज की उपलब्धता स्थानीय {loc_kvk} या कृषि अधिकारी से जाँचें। चाहें तो मैं इन विकल्पों की तुलना कर सकता हूँ।",
+                    "ta": f"உங்கள்{place} {loc_soil}, {loc_water} நீர் நிலை, {loc_season} பருவத்தைப் பொறுத்து {top_crops} பயிர்களைப் பரிசீலிக்கலாம். இவை உங்கள் நிலத்திற்குச் சரிபார்க்கப்பட்ட பரிந்துரைகள் அல்ல. விதைப்பு நேரம், மண்ணின் ஈரப்பதம், விதை கிடைப்பதை உள்ளூர் {loc_kvk} அல்லது வேளாண் அலுவலரிடம் உறுதிப்படுத்துங்கள். விரும்பினால் இவற்றை ஒப்பிட்டுச் சொல்லலாம்.",
+                    "kn": f"ನಿಮ್ಮ{place} {loc_soil}, {loc_water} ನೀರಿನ ಸ್ಥಿತಿ ಮತ್ತು {loc_season} ಹಂಗಾಮಿಗೆ {top_crops} ಬೆಳೆಗಳನ್ನು ಪರಿಗಣಿಸಬಹುದು. ಇವು ನಿಮ್ಮ ಹೊಲಕ್ಕೆ ಪರಿಶೀಲಿತ ಶಿಫಾರಸುಗಳಲ್ಲ. ಬಿತ್ತನೆ ಸಮಯ, ಮಣ್ಣಿನ ತೇವಾಂಶ ಮತ್ತು ಬೀಜ ಲಭ್ಯತೆಯನ್ನು ಸ್ಥಳೀಯ {loc_kvk} ಅಥವಾ ಕೃಷಿ ಅಧಿಕಾರಿಯಿಂದ ಖಚಿತಪಡಿಸಿಕೊಳ್ಳಿ. ಬೇಕಿದ್ದರೆ ಈ ಆಯ್ಕೆಗಳನ್ನು ಹೋಲಿಸಿ ಹೇಳುತ್ತೇನೆ.",
+                    "ml": f"നിങ്ങളുടെ{place} {loc_soil}, {loc_water} ജലലഭ്യത, {loc_season} കാലം എന്നിവ കണക്കിലെടുത്ത് {top_crops} പരിഗണിക്കാം. ഇവ നിങ്ങളുടെ വയലിനായി സ്ഥിരീകരിച്ച ശുപാർശകളല്ല. വിതയ്ക്കുന്ന സമയം, മണ്ണിലെ ഈർപ്പം, വിത്തിന്റെ ലഭ്യത എന്നിവ പ്രാദേശിക {loc_kvk} അല്ലെങ്കിൽ കൃഷി ഉദ്യോഗസ്ഥനുമായി ഉറപ്പാക്കുക. വേണമെങ്കിൽ ഇവ താരതമ്യം ചെയ്ത് പറയാം.",
+                    "mr": f"तुमच्या{place} {loc_soil}, {loc_water} पाण्याची उपलब्धता आणि {loc_season} हंगामासाठी {top_crops} विचारात घेता येतील. या तुमच्या शेतासाठी पडताळलेल्या शिफारसी नाहीत. पेरणीची वेळ, जमिनीतील ओलावा आणि बियाण्यांची उपलब्धता स्थानिक {loc_kvk} किंवा कृषी अधिकाऱ्यांकडून तपासा. हवे असल्यास मी या पर्यायांची तुलना करू शकतो.",
                     "en": f"For {soil}{place}, with {water.lower()} during {season}, {top_crops} are options to compare. These are general suggestions, not verified for your field. Check sowing time, remaining soil moisture and seed availability with your local KVK or agriculture officer. I can help compare these options if you’d like.",
                 }
                 reply = reply_templates.get(language, reply_templates["en"])
             else:
                 # Honest localized empty state while source documents are being verified.
                 unavailable_crop = {
-                    "te": f"{soil} నేల, {water} నీటి సదుపాయం, {season} కాలానికి ధృవీకరించిన ప్రాంతీయ పంట సిఫార్సులు ప్రస్తుతం అందుబాటులో లేవు. ఆధారాలు లేని పంట సూచనలు ఇవ్వము. నేల పరీక్ష ఫలితాలతో మీ స్థానిక KVK లేదా వ్యవసాయ అధికారిని సంప్రదించండి.",
-                    "hi": f"{soil}, {water} और {season} के लिए सत्यापित क्षेत्रीय फसल सिफारिशें उपलब्ध नहीं हैं। बिना प्रमाण के फसल नहीं सुझाएँगे। मिट्टी की जाँच के नतीजों के साथ स्थानीय KVK या कृषि अधिकारी से सलाह लें।",
-                    "ta": f"{soil}, {water}, {season} ஆகியவற்றுக்கு சரிபார்க்கப்பட்ட பிராந்திய பயிர் பரிந்துரைகள் இல்லை. ஆதாரமற்ற ஆலோசனை வழங்கமாட்டோம். மண் பரிசோதனை முடிவுகளுடன் உள்ளூர் KVK-ஐ அணுகவும்.",
-                    "kn": f"{soil}, {water}, {season} ಗಾಗಿ ಪರಿಶೀಲಿಸಿದ ಪ್ರಾದೇಶಿಕ ಬೆಳೆ ಶಿಫಾರಸುಗಳು ಲಭ್ಯವಿಲ್ಲ. ಆಧಾರವಿಲ್ಲದ ಸಲಹೆ ನೀಡುವುದಿಲ್ಲ. ಮಣ್ಣಿನ ಪರೀಕ್ಷಾ ಫಲಿತಾಂಶಗಳೊಂದಿಗೆ ಸ್ಥಳೀಯ KVK ಸಂಪರ್ಕಿಸಿ.",
-                    "ml": f"{soil}, {water}, {season} എന്നിവയ്ക്ക് പരിശോധിച്ച പ്രാദേശിക വിള ശുപാർശകൾ ലഭ്യമല്ല. തെളിവില്ലാത്ത നിർദ്ദേശങ്ങൾ നൽകില്ല. മണ്ണ് പരിശോധനാ ഫലങ്ങളുമായി പ്രാദേശിക KVK-യെ സമീപിക്കുക.",
-                    "mr": f"{soil}, {water}, {season} साठी पडताळलेल्या प्रादेशिक पीक शिफारसी उपलब्ध नाहीत. पुराव्याशिवाय पीक सुचवणार नाही. माती परीक्षणासह स्थानिक KVK चा सल्ला घ्या.",
+                    "te": f"{loc_soil} నేల, {loc_water} నీటి సదుపాయం, {loc_season} కాలానికి ధృవీకరించిన ప్రాంతీయ పంట సిఫార్సులు ప్రస్తుతం అందుబాటులో లేవు. ఆధారాలు లేని పంట సూచనలు ఇవ్వము. నేల పరీక్ష ఫలితాలతో మీ స్థానిక {loc_kvk} లేదా వ్యవసాయ అధికారిని సంప్రదించండి.",
+                    "hi": f"{loc_soil}, {loc_water} और {loc_season} के लिए सत्यापित क्षेत्रीय फसल सिफारिशें उपलब्ध नहीं हैं। बिना प्रमाण के फसल नहीं सुझाएँगे। मिट्टी की जाँच के नतीजों के साथ स्थानीय {loc_kvk} या कृषि अधिकारी से सलाह लें।",
+                    "ta": f"{loc_soil}, {loc_water}, {loc_season} ஆகியவற்றுக்கு சரிபார்க்கப்பட்ட பிராந்திய பயிர் பரிந்துரைகள் இல்லை. ஆதாரமற்ற ஆலோசனை வழங்கமாட்டோம். மண் பரிசோதனை முடிவுகளுடன் உள்ளூர் {loc_kvk}-ஐ அணுகவும்.",
+                    "kn": f"{loc_soil}, {loc_water}, {loc_season} ಗಾಗಿ ಪರಿಶೀಲಿಸಿದ ಪ್ರಾದೇಶಿಕ ಬೆಳೆ ಶಿಫಾರಸುಗಳು ಲಭ್ಯವಿಲ್ಲ. ಆಧಾರವಿಲ್ಲದ ಸಲಹೆ ನೀಡುವುದಿಲ್ಲ. ಮಣ್ಣಿನ ಪರೀಕ್ಷಾ ಫಲಿತಾಂಶಗಳೊಂದಿಗೆ ಸ್ಥಳೀಯ {loc_kvk} ಸಂಪರ್ಕಿಸಿ.",
+                    "ml": f"{loc_soil}, {loc_water}, {loc_season} എന്നിവയ്ക്ക് പരിശോധിച്ച പ്രാദേശിക വിള ശുപാർശകൾ ലഭ്യമല്ല. തെളിവില്ലാത്ത നിർദ്ദേശങ്ങൾ നൽകില്ല. മണ്ണ് പരിശോധനാ ഫലങ്ങളുമായി പ്രാദേശിക {loc_kvk}-യെ സമീപിക്കുക.",
+                    "mr": f"{loc_soil}, {loc_water}, {loc_season} साठी पडताळलेल्या प्रादेशिक पीक शिफारसी उपलब्ध नाहीत. पुराव्याशिवाय पीक सुचवणार नाही. माती परीक्षणासह स्थानिक {loc_kvk} चा सल्ला घ्या.",
                     "en": f"Verified crop recommendations are unavailable for {soil} with {water} during {season}{loc_context}. Kisan Hita will not guess crop suitability. Please consult your local Krishi Vigyan Kendra (KVK) or Mandal Agriculture Officer with your soil-test results.",
                 }
                 reply = unavailable_crop.get(language, unavailable_crop["en"])
@@ -1241,7 +1523,8 @@ class AssistantOrchestrator:
 
         # 4. CROP HEALTH INTENT
         elif active_intent == "crop_health":
-            c_name = collected_slots.get("crop_name") or extract_health_crop(message)
+            raw_c_name = collected_slots.get("crop_name") or extract_health_crop(message)
+            c_name = extract_health_crop(raw_c_name) if raw_c_name else (raw_c_name.strip().title() if raw_c_name else None)
             symptoms = collected_slots.get("symptoms") or (message if message.strip().title() != c_name else "")
             if not symptoms and c_name:
                 symptoms = f"Reported distress on {c_name}"
@@ -1284,11 +1567,31 @@ class AssistantOrchestrator:
             )
             feature_data = h_data.model_dump()
 
-            # Without a photo, ask Gemini for contextual text guidance, never
-            # for visual observations. Retain the deterministic assessment as
-            # a safe fallback and as the source of structured feature data.
-            reply = format_assistant_crop_health_reply(h_data, language)
-            if not active_img:
+            # Check if this is an educational pest/insect scouting question (e.g. "What insects affect my field?",
+            # "Cotton has white insects under the leaves") where the farmer asks about pests rather than reporting
+            # plant pathology / disease distress symptoms (yellowing, spots, wilt, lesions, curl).
+            symptoms_lower = (symptoms or "").lower()
+            has_explicit_symptoms = any(
+                sym in symptoms_lower for sym in (
+                    "yellow", "spot", "wilt", "curl", "rot", "blight", "lesion", "rust", "fungus",
+                    "పసుపు", "మచ్చ", "పీల", "धब्बे", "पीला", "மஞ்சள்", "புள்ளி", "ಹಳದಿ", "ಮಚ್ಚೆ",
+                    "മഞ്ഞ", "പുള്ളി", "पिवळी", "डाग"
+                )
+            )
+            is_pest_scouting_inquiry = (
+                not has_explicit_symptoms
+                and (
+                    _is_white_insect_field_report(symptoms)
+                    or (
+                        (c_name or "").lower() in ("cotton", "పత్తి", "कपास", "பருத்தி", "ಹತ್ತಿ", "പരുത്തി", "कापूस")
+                        and any(phrase in symptoms_lower for phrase in (
+                            "what insects", "which insects", "what pests", "which pests", "insects affect", "white insect"
+                        ))
+                    )
+                )
+            )
+
+            if is_pest_scouting_inquiry and not active_img:
                 context_query = (
                     f"The farmer is growing {c_name}. Their question/report was: {symptoms or 'general pest information'}. "
                     "Answer the actual question with practical, general crop information. If they asked about pests, name the common important pests for this crop and describe distinguishing signs and where to inspect. "
@@ -1306,7 +1609,10 @@ class AssistantOrchestrator:
                         and not _looks_like_diagnostic_template_response(contextual_reply)):
                     reply = contextual_reply
                 else:
-                    reply = _cotton_pest_information_fallback(symptoms, language) or reply
+                    reply = _cotton_pest_information_fallback(symptoms, language) or format_assistant_crop_health_reply(h_data, language)
+            else:
+                # Deterministic assembly of all mandatory crop health categories
+                reply = format_assistant_crop_health_reply(h_data, language)
 
             clear_conversation_session(conversation_id)
             return ChatResponse(
@@ -1363,7 +1669,7 @@ class AssistantOrchestrator:
                         reply = _localized_unavailable_reply(language)
 
             m_lower = message.lower()
-            if any(w in m_lower for w in ["chilli", "chili", "mirchi", "మిర్చి", "मिर्च"]):
+            if any(w in m_lower for w in ["chilli", "chili", "mirchi", "మిరప", "మిర్చి", "मिर्च"]):
                 sug_actions = ["Check Chilli Mandi Price", "Chilli Leaf Curl & Pests"]
             elif any(w in m_lower for w in ["cotton", "patti", "పత్తి", "कपास"]):
                 sug_actions = ["Check Cotton Mandi Price", "Cotton Pest Management"]

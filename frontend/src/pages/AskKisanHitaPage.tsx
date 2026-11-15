@@ -28,6 +28,7 @@ export const AskKisanHitaPage: React.FC<AskKisanHitaPageProps> = ({ onRouteFeatu
     suggestedQuestions,
     pendingWorkflow,
     nextSlot,
+    assistantName,
   } = useAssistant();
 
   const [inputVal, setInputVal] = useState('');
@@ -112,7 +113,7 @@ export const AskKisanHitaPage: React.FC<AskKisanHitaPageProps> = ({ onRouteFeatu
             <span className="badge">{t('assistantPageBadge')}</span>
           </div>
           <h1 style={{ fontSize: 'clamp(1.8rem, 4vw, 2.4rem)', marginBottom: '0.4rem' }}>
-            Ask {KISAN_HITA_NAME}
+            Ask {assistantName || KISAN_HITA_NAME}
           </h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
             {t('assistantPageSub')}
@@ -144,7 +145,7 @@ export const AskKisanHitaPage: React.FC<AskKisanHitaPageProps> = ({ onRouteFeatu
                 <Bot size={18} />
               </div>
               <span style={{ fontSize: '0.9rem', fontWeight: 700 }}>
-                {KISAN_HITA_NAME}{profile.district ? ` • ${profile.district}` : ''}
+                {assistantName || KISAN_HITA_NAME}{profile.district ? ` • ${profile.district}` : ''}
               </span>
             </div>
 

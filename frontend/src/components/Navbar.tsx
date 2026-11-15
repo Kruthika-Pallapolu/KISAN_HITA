@@ -3,7 +3,8 @@ import { useLanguage } from '../context/LanguageContext';
 import { useFarmProfile } from '../context/FarmProfileContext';
 import { KISAN_HITA_NAME } from '../services/productIdentity';
 import { useAssistant } from '../context/AssistantContext';
-import { Bot, Sprout, ShieldAlert, TrendingUp, Settings, Globe, Menu, X } from 'lucide-react';
+import { Bot, CloudSun, Sprout, ShieldAlert, TrendingUp, Settings, Globe, Menu, X, HelpCircle } from 'lucide-react';
+import { ONBOARDING_COPY } from '../i18n/onboardingCopy';
 
 interface NavbarProps {
   currentTab: string;
@@ -20,6 +21,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onSelectTab }) => {
 
   const navItems = [
     { id: 'home', label: t('navHome'), icon: null },
+    { id: 'weather', label: t('navWeather'), icon: <CloudSun size={17} /> },
     { id: 'choose-crop', label: t('navChooseCrop'), icon: <Sprout size={17} /> },
     { id: 'check-crop', label: t('navCheckCrop'), icon: <ShieldAlert size={17} /> },
     { id: 'market-prices', label: t('navMarketPrices'), icon: <TrendingUp size={17} /> },
@@ -134,8 +136,30 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onSelectTab }) => {
           })}
         </nav>
 
-        {/* Actions (Language & Settings) */}
+        {/* Actions (Help, Language & Settings) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }} className="navbar-actions">
+          {/* Website Guide / Help Button */}
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('kisan-hita:open-onboarding'))}
+            className="help-button"
+            style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '50%',
+              background: 'rgba(244, 236, 216, 0.08)',
+              border: '1px solid var(--border-card)',
+              color: 'var(--cream)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer'
+            }}
+            title={ONBOARDING_COPY[language]?.reopenGuide || 'Website Guide'}
+            aria-label={ONBOARDING_COPY[language]?.reopenGuide || 'Website Guide'}
+          >
+            <HelpCircle size={18} style={{ color: 'var(--amber)' }} />
+          </button>
+
           {/* Language Selector Pill */}
           <button
             onClick={() => setShowLanguageModal(true)}
@@ -235,6 +259,31 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onSelectTab }) => {
               <span>{item.label}</span>
             </button>
           ))}
+
+          <button
+            onClick={() => {
+              setMobileMenuOpen(false);
+              window.dispatchEvent(new CustomEvent('kisan-hita:open-onboarding'));
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.8rem',
+              background: 'none',
+              border: 'none',
+              color: 'var(--cream)',
+              padding: '0.7rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              fontSize: '0.95rem',
+              fontWeight: 500,
+              textAlign: 'left',
+              width: '100%',
+              cursor: 'pointer'
+            }}
+          >
+            <HelpCircle size={17} style={{ color: 'var(--amber)' }} />
+            <span>{ONBOARDING_COPY[language]?.reopenGuide || 'Website Guide'}</span>
+          </button>
         </div>
       )}
 

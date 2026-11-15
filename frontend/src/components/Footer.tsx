@@ -58,6 +58,9 @@ export const Footer: React.FC<FooterProps> = ({ onSelectTab }) => {
               <a href="#home" onClick={(e) => { e.preventDefault(); onSelectTab('home'); }} style={{ color: 'var(--cream)', opacity: 0.75 }}>
                 {t('navHome')}
               </a>
+              <a href="#weather" onClick={(e) => { e.preventDefault(); onSelectTab('weather'); }} style={{ color: 'var(--cream)', opacity: 0.75 }}>
+                {t('navWeather')}
+              </a>
               <a href="#choose-crop" onClick={(e) => { e.preventDefault(); onSelectTab('choose-crop'); }} style={{ color: 'var(--cream)', opacity: 0.75 }}>
                 {t('navChooseCrop')}
               </a>

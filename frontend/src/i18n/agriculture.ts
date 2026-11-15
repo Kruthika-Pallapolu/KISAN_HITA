@@ -1,4 +1,5 @@
 import type { SupportedLanguage } from './translations';
+import locationTranslations from '../data/locationTranslations.json' with { type: 'json' };
 
 const cropNames: Record<SupportedLanguage, Record<string, string>> = {
   en: {
@@ -523,7 +524,7 @@ const seasons: Record<SupportedLanguage, Record<string, string>> = {
   },
 };
 
-const locations: Record<SupportedLanguage, Record<string, string>> = {
+const baseLocations: Record<SupportedLanguage, Record<string, string>> = {
   en: {
     Telangana: 'Telangana',
     'Andhra Pradesh': 'Andhra Pradesh',
@@ -995,6 +996,16 @@ const locations: Record<SupportedLanguage, Record<string, string>> = {
   },
 };
 
+const locations: Record<SupportedLanguage, Record<string, string>> = {
+  en: { ...locationTranslations.en, ...baseLocations.en },
+  te: { ...locationTranslations.te, ...baseLocations.te },
+  hi: { ...locationTranslations.hi, ...baseLocations.hi },
+  ta: { ...locationTranslations.ta, ...baseLocations.ta },
+  kn: { ...locationTranslations.kn, ...baseLocations.kn },
+  ml: { ...locationTranslations.ml, ...baseLocations.ml },
+  mr: { ...locationTranslations.mr, ...baseLocations.mr },
+};
+
 const quintal: Record<SupportedLanguage, string> = {
   en: 'Quintal (100 kg)', te: 'క్వింటాల్ (100 కిలోలు)', hi: 'क्विंटल (100 किलोग्राम)',
   ta: 'குவிண்டால் (100 கிலோ)', kn: 'ಕ್ವಿಂಟಾಲ್ (100 ಕೆ.ಜಿ.)', ml: 'ക്വിന്റൽ (100 കിലോ)', mr: 'क्विंटल (100 किलोग्रॅम)',
@@ -1055,6 +1066,75 @@ export const localizeLocation = (value: string, language: SupportedLanguage): st
   // Proper names without a curated label remain canonical English.
   return locations[language]?.[value] || value;
 };
+
+const weatherConditions: Record<SupportedLanguage, Record<string, string>> = {
+  en: {
+    'Clear Sky': 'Clear sky', 'Mainly Clear': 'Mainly clear', 'Partly Cloudy': 'Partly cloudy',
+    Overcast: 'Overcast', Fog: 'Fog', 'Depositing Rime Fog': 'Freezing fog',
+    'Light Drizzle': 'Light drizzle', 'Moderate Drizzle': 'Moderate drizzle', 'Dense Drizzle': 'Heavy drizzle',
+    'Slight Rain': 'Light rain', 'Moderate Rain': 'Moderate rain', 'Heavy Rain': 'Heavy rain',
+    'Slight Rain Showers': 'Light rain showers', 'Moderate Rain Showers': 'Moderate rain showers',
+    'Violent Rain Showers': 'Very heavy rain showers', Thunderstorm: 'Thunderstorm',
+    'Thunderstorm with Hail': 'Thunderstorm with hail',
+  },
+  te: {
+    'Clear Sky': 'ఆకాశం నిర్మలంగా ఉంది', 'Mainly Clear': 'ఎక్కువగా నిర్మలమైన ఆకాశం', 'Partly Cloudy': 'కొంత మేఘావృతం',
+    Overcast: 'పూర్తిగా మేఘావృతం', Fog: 'పొగమంచు', 'Depositing Rime Fog': 'గడ్డకట్టే పొగమంచు',
+    'Light Drizzle': 'తేలికపాటి చిరుజల్లు', 'Moderate Drizzle': 'మోస్తరు చిరుజల్లు', 'Dense Drizzle': 'దట్టమైన చిరుజల్లు',
+    'Slight Rain': 'తేలికపాటి వర్షం', 'Moderate Rain': 'మోస్తరు వర్షం', 'Heavy Rain': 'భారీ వర్షం',
+    'Slight Rain Showers': 'తేలికపాటి జల్లులు', 'Moderate Rain Showers': 'మోస్తరు జల్లులు',
+    'Violent Rain Showers': 'తీవ్ర వర్షపు జల్లులు', Thunderstorm: 'ఉరుములతో కూడిన వర్షం',
+    'Thunderstorm with Hail': 'వడగళ్లతో కూడిన ఉరుముల వర్షం',
+  },
+  hi: {
+    'Clear Sky': 'साफ़ आसमान', 'Mainly Clear': 'अधिकतर साफ़', 'Partly Cloudy': 'आंशिक बादल',
+    Overcast: 'घने बादल', Fog: 'कोहरा', 'Depositing Rime Fog': 'जमने वाला कोहरा',
+    'Light Drizzle': 'हल्की बूंदाबांदी', 'Moderate Drizzle': 'मध्यम बूंदाबांदी', 'Dense Drizzle': 'घनी बूंदाबांदी',
+    'Slight Rain': 'हल्की बारिश', 'Moderate Rain': 'मध्यम बारिश', 'Heavy Rain': 'भारी बारिश',
+    'Slight Rain Showers': 'हल्की वर्षा की बौछारें', 'Moderate Rain Showers': 'मध्यम वर्षा की बौछारें',
+    'Violent Rain Showers': 'तेज़ वर्षा की बौछारें', Thunderstorm: 'गरज-चमक के साथ बारिश',
+    'Thunderstorm with Hail': 'ओलों के साथ गरज-चमक',
+  },
+  ta: {
+    'Clear Sky': 'வானம் தெளிவாக உள்ளது', 'Mainly Clear': 'பெரும்பாலும் தெளிவு', 'Partly Cloudy': 'ஓரளவு மேகமூட்டம்',
+    Overcast: 'முழு மேகமூட்டம்', Fog: 'மூடுபனி', 'Depositing Rime Fog': 'உறைபனி மூடுபனி',
+    'Light Drizzle': 'லேசான தூறல்', 'Moderate Drizzle': 'மிதமான தூறல்', 'Dense Drizzle': 'அடர்ந்த தூறல்',
+    'Slight Rain': 'லேசான மழை', 'Moderate Rain': 'மிதமான மழை', 'Heavy Rain': 'கனமழை',
+    'Slight Rain Showers': 'லேசான மழைத் தூறல்கள்', 'Moderate Rain Showers': 'மிதமான மழைத் தூறல்கள்',
+    'Violent Rain Showers': 'தீவிர மழைத் தூறல்கள்', Thunderstorm: 'இடியுடன் மழை',
+    'Thunderstorm with Hail': 'ஆலங்கட்டியுடன் இடியுடன் மழை',
+  },
+  kn: {
+    'Clear Sky': 'ಆಕಾಶ ತಿಳಿಯಾಗಿದೆ', 'Mainly Clear': 'ಹೆಚ್ಚಾಗಿ ತಿಳಿಯಾದ ಆಕಾಶ', 'Partly Cloudy': 'ಭಾಗಶಃ ಮೋಡ ಕವಿದಿದೆ',
+    Overcast: 'ಮೋಡ ಕವಿದಿದೆ', Fog: 'ಮಂಜು', 'Depositing Rime Fog': 'ಹಿಮದ ಮಂಜು',
+    'Light Drizzle': 'ಹಗುರ ತುಂತುರು ಮಳೆ', 'Moderate Drizzle': 'ಮಧ್ಯಮ ತುಂತುರು ಮಳೆ', 'Dense Drizzle': 'ದಟ್ಟ ತುಂತುರು ಮಳೆ',
+    'Slight Rain': 'ಹಗುರ ಮಳೆ', 'Moderate Rain': 'ಮಧ್ಯಮ ಮಳೆ', 'Heavy Rain': 'ಭಾರಿ ಮಳೆ',
+    'Slight Rain Showers': 'ಹಗುರ ಮಳೆಯ ತುಂತುರು', 'Moderate Rain Showers': 'ಮಧ್ಯಮ ಮಳೆಯ ತುಂತುರು',
+    'Violent Rain Showers': 'ತೀವ್ರ ಮಳೆಯ ತುಂತುರು', Thunderstorm: 'ಗುಡುಗು ಸಹಿತ ಮಳೆ',
+    'Thunderstorm with Hail': 'ಆಲಿಕಲ್ಲು ಸಹಿತ ಗುಡುಗು ಮಳೆ',
+  },
+  ml: {
+    'Clear Sky': 'ആകാശം തെളിഞ്ഞിരിക്കുന്നു', 'Mainly Clear': 'മിക്കവാറും തെളിഞ്ഞ ആകാശം', 'Partly Cloudy': 'ഭാഗികമായി മേഘാവൃതം',
+    Overcast: 'മേഘാവൃതം', Fog: 'മൂടൽമഞ്ഞ്', 'Depositing Rime Fog': 'തണുത്തുറയുന്ന മൂടൽമഞ്ഞ്',
+    'Light Drizzle': 'നേരിയ ചാറ്റൽമഴ', 'Moderate Drizzle': 'മിതമായ ചാറ്റൽമഴ', 'Dense Drizzle': 'കനത്ത ചാറ്റൽമഴ',
+    'Slight Rain': 'നേരിയ മഴ', 'Moderate Rain': 'മിതമായ മഴ', 'Heavy Rain': 'കനത്ത മഴ',
+    'Slight Rain Showers': 'നേരിയ മഴച്ചാറ്റൽ', 'Moderate Rain Showers': 'മിതമായ മഴച്ചാറ്റൽ',
+    'Violent Rain Showers': 'ശക്തമായ മഴച്ചാറ്റൽ', Thunderstorm: 'ഇടിമിന്നലോടുകൂടിയ മഴ',
+    'Thunderstorm with Hail': 'ആലിപ്പഴത്തോടുകൂടിയ ഇടിമിന്നൽ',
+  },
+  mr: {
+    'Clear Sky': 'आकाश निरभ्र', 'Mainly Clear': 'बहुतेक निरभ्र', 'Partly Cloudy': 'अंशतः ढगाळ',
+    Overcast: 'ढगाळ', Fog: 'धुके', 'Depositing Rime Fog': 'गोठणारे धुके',
+    'Light Drizzle': 'हलकी रिमझिम', 'Moderate Drizzle': 'मध्यम रिमझिम', 'Dense Drizzle': 'दाट रिमझिम',
+    'Slight Rain': 'हलका पाऊस', 'Moderate Rain': 'मध्यम पाऊस', 'Heavy Rain': 'मुसळधार पाऊस',
+    'Slight Rain Showers': 'हलकी पावसाची सर', 'Moderate Rain Showers': 'मध्यम पावसाच्या सरी',
+    'Violent Rain Showers': 'जोरदार पावसाच्या सरी', Thunderstorm: 'मेघगर्जनेसह पाऊस',
+    'Thunderstorm with Hail': 'गारपिटीसह पाऊस',
+  },
+};
+
+export const localizeWeatherCondition = (value: string, language: SupportedLanguage, _code?: number): string =>
+  weatherConditions[language]?.[value] || value;
 
 export function getAgricultureTranslationCoverage(): Record<SupportedLanguage, boolean> {
   const codes: SupportedLanguage[] = ['te', 'en', 'hi', 'ta', 'kn', 'ml', 'mr'];

@@ -31,6 +31,7 @@ export const KisanAssistantModal: React.FC<KisanAssistantModalProps> = ({ onRout
     suggestedQuestions,
     pendingWorkflow,
     nextSlot,
+    assistantName,
   } = useAssistant();
 
   const [inputVal, setInputVal] = useState('');
@@ -44,7 +45,7 @@ export const KisanAssistantModal: React.FC<KisanAssistantModalProps> = ({ onRout
     setVoiceConfigLoaded(false);
     fetch('/api/voice/config', { credentials: 'same-origin' })
       .then((response) => response.ok ? response.json() : null)
-      .then((config) => { if (active) { setPrismaEnabled(config?.prisma_enabled === true); setVoiceConfigLoaded(true); } })
+      .then((config) => { if (active) { setPrismaEnabled(config?.prisma_enabled === true && config?.allow_paid_live_calls === true); setVoiceConfigLoaded(true); } })
       .catch(() => { if (active) { setPrismaEnabled(false); setVoiceConfigLoaded(true); } });
     return () => { active = false; };
   }, [isOpen]);
@@ -145,7 +146,7 @@ export const KisanAssistantModal: React.FC<KisanAssistantModalProps> = ({ onRout
             </div>
             <div>
               <div style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--cream)', lineHeight: 1.2 }}>
-                {t('assistantTitle')}
+                {assistantName || t('assistantTitle')}
               </div>
               <div className="mono" style={{ fontSize: '0.72rem', color: 'var(--amber)' }}>
                 {t('contextGeneral')} • {profile.district}

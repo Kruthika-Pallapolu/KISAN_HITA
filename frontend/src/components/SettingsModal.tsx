@@ -2,11 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { useFarmProfile } from '../context/FarmProfileContext';
+import { useAssistant } from '../context/AssistantContext';
 import { SupportedLanguage } from '../i18n/translations';
-import { Settings, X, Check } from 'lucide-react';
+import { Settings, X, Check, HelpCircle } from 'lucide-react';
+import { ONBOARDING_COPY } from '../i18n/onboardingCopy';
 import { localizeSoil, localizeWater } from '../i18n/agriculture';
 import { FarmLocationFields } from './FarmLocationFields';
 import { getState, getStateForDistrict } from '../services/geography';
+import { buildDefaultWakePhrase, getWakePreferences, saveWakePreferences } from '../services/wakeWord';
 
 const GUEST_SETTINGS_COPY: Record<SupportedLanguage, { notice: string; end: string }> = {
   en: { notice: 'Guest settings last for this browser session. Guest access expires after 24 hours.', end: 'End guest session' },
@@ -22,6 +25,7 @@ export const SettingsModal: React.FC = () => {
   const { t, language, setLanguage, languages } = useLanguage();
   const { user, isGuest, signOut } = useAuth();
   const { profile, updateProfile, showSettingsModal, setShowSettingsModal } = useFarmProfile();
+  const { setAssistantName: updateAssistantName } = useAssistant();
 
   const [state, setState] = useState(getState(profile.state)?.name || getStateForDistrict(profile.district)?.name || '');
   const [district, setDistrict] = useState(profile.district);
@@ -29,6 +33,23 @@ export const SettingsModal: React.FC = () => {
   const [soilType, setSoilType] = useState(profile.soilType);
   const [waterSource, setWaterSource] = useState(profile.waterSource);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [wakeName, setWakeName] = useState(() => getWakePreferences().name);
+
+  useEffect(() => {
+    const open = () => setShowSettingsModal(true);
+    window.addEventListener('kisan-hita:open-settings', open);
+    return () => window.removeEventListener('kisan-hita:open-settings', open);
+  }, [setShowSettingsModal]);
+
+  useEffect(() => {
+    const handleSync = () => {
+      setWakeName(getWakePreferences(localStorage, language).name);
+    };
+    window.addEventListener('kisan-hita:wake-preferences-updated', handleSync);
+    return () => {
+      window.removeEventListener('kisan-hita:wake-preferences-updated', handleSync);
+    };
+  }, [language]);
 
   useEffect(() => {
     if (!showSettingsModal) return;
@@ -37,9 +58,14 @@ export const SettingsModal: React.FC = () => {
     setVillage(profile.village);
     setSoilType(profile.soilType);
     setWaterSource(profile.waterSource);
-  }, [showSettingsModal, profile]);
+    setWakeName(getWakePreferences(localStorage, language).name);
+  }, [showSettingsModal, profile, language]);
 
   if (!showSettingsModal) return null;
+
+  const handleWakeNameChange = (nameInput: string) => {
+    setWakeName(nameInput);
+  };
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,6 +76,11 @@ export const SettingsModal: React.FC = () => {
       soilType,
       waterSource,
     });
+    if (updateAssistantName) {
+      updateAssistantName(wakeName);
+    } else {
+      saveWakePreferences(wakeName, wakeName, localStorage, language);
+    }
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
@@ -111,6 +142,24 @@ export const SettingsModal: React.FC = () => {
         </div>}
 
         <form onSubmit={handleSave}>
+          <section style={{ margin: '1rem 0', padding: '1rem', border: '1px solid var(--border-card)', borderRadius: 'var(--radius-md)' }}>
+            <h3 style={{ marginTop: 0 }}>{t('handsFreeTitle')}</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '.84rem' }}>{t('handsFreeDescription')}</p>
+            {/* The assistant name (handsFreeName) and wake phrase (handsFreePhrase) are identical */}
+            <label className="input-label">
+              {t('handsFreeName')}
+              <input
+                className="input-field"
+                value={wakeName}
+                maxLength={40}
+                onChange={(event) => handleWakeNameChange(event.target.value)}
+              />
+            </label>
+            <small style={{ color: 'var(--text-muted)', display: 'block', margin: '0.4rem 0' }}>
+              The assistant name you enter is the exact wake phrase used to activate hands-free mode. Speak this exact name to start.
+            </small>
+            <small style={{ color: 'var(--text-muted)' }}>{t('handsFreePrivacy')}</small>
+          </section>
           {/* Language Selection */}
           <div className="input-group">
             <label className="input-label">{t('languageSelect')}</label>
@@ -161,7 +210,31 @@ export const SettingsModal: React.FC = () => {
             </select>
           </div>
 
-          <div style={{ marginTop: '1.6rem', display: 'flex', gap: '1rem' }}>
+          {/* Website Guide Trigger */}
+          <div style={{ marginTop: '1.2rem' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setShowSettingsModal(false);
+                window.dispatchEvent(new CustomEvent('kisan-hita:open-onboarding'));
+              }}
+              className="btn btn-secondary"
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.5rem',
+                padding: '0.75rem',
+                fontSize: '0.88rem',
+              }}
+            >
+              <HelpCircle size={17} style={{ color: 'var(--amber)' }} />
+              <span>{ONBOARDING_COPY[language]?.viewGuide || 'View Website Guide'}</span>
+            </button>
+          </div>
+
+          <div style={{ marginTop: '1.2rem', display: 'flex', gap: '1rem' }}>
             <button
               type="submit"
               className="btn btn-primary"

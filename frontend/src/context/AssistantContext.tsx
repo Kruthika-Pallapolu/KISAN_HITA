@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { useLanguage } from './LanguageContext';
 import { useFarmProfile } from './FarmProfileContext';
 import { SpeechService } from '../services/speech';
@@ -28,6 +28,8 @@ export interface AssistantSpeechCallbacks {
 export interface AssistantSendOptions extends AssistantSpeechCallbacks {}
 
 interface AssistantContextType {
+  assistantName: string;
+  setAssistantName: (name: string) => void;
   isOpen: boolean;
   openAssistant: () => void;
   closeAssistant: () => void;
@@ -52,6 +54,55 @@ interface AssistantContextType {
 
 const AssistantContext = createContext<AssistantContextType | undefined>(undefined);
 
+function getStoredAssistantName(storage: Storage): string {
+  try {
+    const stored = (storage.getItem('kisan_hita_wake_name') || '').trim();
+    if (stored) {
+      return stored;
+    }
+    if (typeof window !== 'undefined') {
+      const altStorages = [window.localStorage, window.sessionStorage].filter((s) => s && s !== storage);
+      for (const alt of altStorages) {
+        try {
+          const altStored = (alt.getItem('kisan_hita_wake_name') || '').trim();
+          if (altStored) {
+            return altStored;
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  return 'Mitra';
+}
+
+function persistAssistantName(name: string, storage: Storage): string {
+  const clean = (name || '').trim().slice(0, 40) || 'Mitra';
+  try {
+    storage.setItem('kisan_hita_wake_name', clean);
+    storage.setItem('kisan_hita_wake_name_configured', 'true');
+    const allLangs = ['en', 'te', 'hi', 'ta', 'kn', 'ml', 'mr'];
+    for (const l of allLangs) {
+      storage.setItem(`kisan_hita_wake_phrase_${l}`, clean);
+    }
+    storage.setItem('kisan_hita_wake_phrase', clean);
+    if (typeof window !== 'undefined') {
+      const altStorages = [window.localStorage, window.sessionStorage].filter((s) => s && s !== storage);
+      for (const alt of altStorages) {
+        try {
+          alt.setItem('kisan_hita_wake_name', clean);
+          alt.setItem('kisan_hita_wake_name_configured', 'true');
+          for (const l of allLangs) {
+            alt.setItem(`kisan_hita_wake_phrase_${l}`, clean);
+          }
+          alt.setItem('kisan_hita_wake_phrase', clean);
+        } catch {}
+      }
+      window.dispatchEvent(new CustomEvent('kisan-hita:wake-preferences-updated'));
+    }
+  } catch {}
+  return clean;
+}
+
 function getConversationId(isGuest: boolean, guestContextId: string | null): string {
   const storage = isGuest ? window.sessionStorage : window.localStorage;
   const guestScope = (guestContextId || 'new').replace(/[^a-zA-Z0-9_-]/g, '');
@@ -68,6 +119,30 @@ export const AssistantProvider: React.FC<{ children: React.ReactNode; isGuest?: 
     ? { messages: `kisan_hita_guest_${guestScope}_chat_messages`, conversation: `kisan_hita_guest_${guestScope}_conversation_id`, pending: `kisan_hita_guest_${guestScope}_pending_wf`, next: `kisan_hita_guest_${guestScope}_next_slot`, collected: `kisan_hita_guest_${guestScope}_collected_slots` }
     : { messages: 'kisan_hita_chat_messages', conversation: 'kisan_hita_conversation_id', pending: 'kisan_hita_pending_wf', next: 'kisan_hita_next_slot', collected: 'kisan_hita_collected_slots' };
   const [conversationId, setConversationId] = useState<string>(() => getConversationId(isGuest, guestContextId));
+
+  const [assistantName, setAssistantNameState] = useState<string>(() => {
+    return getStoredAssistantName(storage);
+  });
+
+  const setAssistantName = useCallback((name: string) => {
+    const clean = persistAssistantName(name, storage);
+    setAssistantNameState(clean);
+  }, [storage]);
+
+  useEffect(() => {
+    const syncName = () => {
+      try {
+        setAssistantNameState(getStoredAssistantName(storage));
+      } catch {}
+    };
+    syncName();
+    window.addEventListener('kisan-hita:wake-preferences-updated', syncName);
+    window.addEventListener('storage', syncName);
+    return () => {
+      window.removeEventListener('kisan-hita:wake-preferences-updated', syncName);
+      window.removeEventListener('storage', syncName);
+    };
+  }, [storage]);
 
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [pendingWorkflow, setPendingWorkflow] = useState<string | null>(() => {
@@ -222,11 +297,15 @@ export const AssistantProvider: React.FC<{ children: React.ReactNode; isGuest?: 
     } catch (error) {
       if (runId !== prismaRunRef.current) return;
       const message = `${(error as { name?: string })?.name || ''} ${(error as { message?: string })?.message || ''}`;
-      setVoiceError(/NotAllowed|Permission|denied|SecurityError/i.test(message)
-        ? t('voicePrismaPermissionDenied')
-        : /format|recording is not supported/i.test(message)
-          ? t('voicePrismaUnsupported')
-          : t('voicePrismaFailed'));
+      setVoiceError(
+        /NotAllowed|Permission|denied|SecurityError/i.test(message)
+          ? t('voicePrismaPermissionDenied')
+          : /format|recording is not supported/i.test(message)
+            ? t('voicePrismaUnsupported')
+            : /unauthorized|disabled|not configured|process authorization/i.test(message)
+              ? t('voicePrismaUnavailable')
+              : t('voicePrismaFailed')
+      );
     }
   };
 
@@ -248,11 +327,15 @@ export const AssistantProvider: React.FC<{ children: React.ReactNode; isGuest?: 
       recorder.cancel();
       if (runId !== prismaRunRef.current) return;
       const message = (error as { message?: string })?.message || '';
-      setVoiceError(/30 seconds|too long/i.test(message)
-        ? t('voicePrismaTooLong')
-        : /WebM|format|unsupported/i.test(message)
-          ? t('voicePrismaUnsupported')
-          : t('voicePrismaFailed'));
+      setVoiceError(
+        /30 seconds|too long/i.test(message)
+          ? t('voicePrismaTooLong')
+          : /WebM|format|unsupported/i.test(message)
+            ? t('voicePrismaUnsupported')
+            : /unauthorized|disabled|not configured|process authorization/i.test(message)
+              ? t('voicePrismaUnavailable')
+              : t('voicePrismaFailed')
+      );
     }
   };
 
@@ -423,6 +506,8 @@ export const AssistantProvider: React.FC<{ children: React.ReactNode; isGuest?: 
   return (
     <AssistantContext.Provider
       value={{
+        assistantName,
+        setAssistantName,
         isOpen,
         openAssistant,
         closeAssistant,

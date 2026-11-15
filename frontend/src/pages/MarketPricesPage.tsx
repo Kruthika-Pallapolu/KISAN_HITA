@@ -168,7 +168,7 @@ export const MarketPricesPage: React.FC<MarketPricesPageProps> = ({ onNavigate }
     } else {
       setActiveSpeechIdx(idx);
       const price = rec.modal_price_per_kg == null ? 'No modal price was provided.' : `Modal price is ${rec.modal_price_per_kg} rupees per kilogram.`;
-      const speech = `${rec.commodity}, ${rec.district}, ${rec.state}: ${price} DEMO DATA, illustrative reference only, not a reported market price.`;
+      const speech = `${localizeCropName(rec.commodity, language)}, ${localizeLocation(rec.district, language)}, ${localizeLocation(rec.state, language)}: ${price} DEMO DATA, illustrative reference only, not a reported market price.`;
       speakText(speech);
     }
   };
@@ -278,7 +278,11 @@ export const MarketPricesPage: React.FC<MarketPricesPageProps> = ({ onNavigate }
                     placeholder={t('commodityPlaceholder')}
                   />
                   <datalist id="market-commodity-options">
-                    {commodities.map((commodity) => <option key={commodity} value={commodity} />)}
+                    {commodities.map((commodity) => (
+                      <option key={commodity} value={commodity} label={localizeCropName(commodity, language)}>
+                        {localizeCropName(commodity, language)}
+                      </option>
+                    ))}
                   </datalist>
                 </div>
               </div>

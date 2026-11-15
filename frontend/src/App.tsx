@@ -10,27 +10,67 @@ import { SettingsModal } from './components/SettingsModal';
 import { KisanAssistantModal } from './components/KisanAssistantModal';
 import { PersistentAssistantBar } from './components/PersistentAssistantBar';
 import { HomePage } from './pages/HomePage';
+import { WeatherPage } from './pages/WeatherPage';
 import { ChooseCropPage } from './pages/ChooseCropPage';
 import { CheckCropPage } from './pages/CheckCropPage';
 import { MarketPricesPage } from './pages/MarketPricesPage';
 import { AskKisanHitaPage } from './pages/AskKisanHitaPage';
+import { HandsFreeAssistant } from './components/HandsFreeAssistant';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthPage } from './pages/AuthPage';
 import { FirstVisitLanguageSelection } from './components/FirstVisitLanguageSelection';
 import { ScrollScrubBackground } from './components/ScrollScrubBackground';
 import { useLanguage } from './context/LanguageContext';
 
+const resolveRouteTab = (raw: string): string | null => {
+  const cleaned = raw.replace(/^#\/?/, '').replace(/^\//, '').split('?')[0].split('/')[0].trim().toLowerCase();
+  if (cleaned === 'weather') return 'weather';
+  if (cleaned === 'choose-crop' || cleaned === 'crop_advisor') return 'choose-crop';
+  if (cleaned === 'check-crop' || cleaned === 'crop_health') return 'check-crop';
+  if (cleaned === 'market-prices' || cleaned === 'market_prices') return 'market-prices';
+  if (cleaned === 'ask_kisan' || cleaned === 'ask-kisan') return 'ask_kisan';
+  if (cleaned === 'home' || cleaned === 'dashboard') return 'home';
+  return null;
+};
+
+const getInitialTab = (): string => {
+  if (typeof window === 'undefined') return 'home';
+  return resolveRouteTab(window.location.hash) || resolveRouteTab(window.location.pathname) || 'home';
+};
+
 const AppContent: React.FC = () => {
-  const [currentTab, setCurrentTab] = useState<string>('home');
+  const [currentTab, setCurrentTab] = useState<string>(getInitialTab);
+
+  React.useEffect(() => {
+    const onRouteSync = () => {
+      const tab = resolveRouteTab(window.location.hash) || resolveRouteTab(window.location.pathname);
+      if (tab) setCurrentTab(tab);
+    };
+    window.addEventListener('hashchange', onRouteSync);
+    window.addEventListener('popstate', onRouteSync);
+    return () => {
+      window.removeEventListener('hashchange', onRouteSync);
+      window.removeEventListener('popstate', onRouteSync);
+    };
+  }, []);
 
   const handleRouteFeature = (feature: string) => {
-    if (feature === 'home' || feature === 'dashboard') setCurrentTab('home');
-    else if (feature === 'crop_advisor' || feature === 'choose-crop') setCurrentTab('choose-crop');
-    else if (feature === 'crop_health' || feature === 'check-crop') setCurrentTab('check-crop');
-    else if (feature === 'market_prices' || feature === 'market-prices') setCurrentTab('market-prices');
-    else if (feature === 'ask_kisan') setCurrentTab('ask_kisan');
-    else setCurrentTab('home');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    let nextTab = 'home';
+    if (feature === 'home' || feature === 'dashboard') nextTab = 'home';
+    else if (feature === 'weather') nextTab = 'weather';
+    else if (feature === 'crop_advisor' || feature === 'choose-crop') nextTab = 'choose-crop';
+    else if (feature === 'crop_health' || feature === 'check-crop') nextTab = 'check-crop';
+    else if (feature === 'market_prices' || feature === 'market-prices') nextTab = 'market-prices';
+    else if (feature === 'ask_kisan') nextTab = 'ask_kisan';
+
+    setCurrentTab(nextTab);
+    if (typeof window !== 'undefined') {
+      const targetHash = nextTab === 'home' ? '' : `#${nextTab}`;
+      if (window.location.hash !== targetHash) {
+        window.history.pushState(null, '', targetHash || window.location.pathname);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   return (
@@ -44,6 +84,7 @@ const AppContent: React.FC = () => {
       {/* Main Page Content */}
       <main style={{ flex: 1, zIndex: 1 }}>
         {currentTab === 'home' && <HomePage onSelectTab={handleRouteFeature} />}
+        {currentTab === 'weather' && <WeatherPage onNavigate={handleRouteFeature} />}
         {currentTab === 'choose-crop' && <ChooseCropPage onNavigate={handleRouteFeature} />}
         {currentTab === 'check-crop' && <CheckCropPage onNavigate={handleRouteFeature} />}
         {currentTab === 'market-prices' && <MarketPricesPage onNavigate={handleRouteFeature} />}
@@ -52,6 +93,7 @@ const AppContent: React.FC = () => {
 
       {/* Central Persistent Assistant Floating Bar (Accessible on every page) */}
       <PersistentAssistantBar />
+      <HandsFreeAssistant />
 
       {/* Central Kisan Assistant Conversational Modal */}
       <KisanAssistantModal onRouteFeature={handleRouteFeature} />
@@ -59,8 +101,8 @@ const AppContent: React.FC = () => {
       {/* First-Visit / On-Demand Language Selection Modal */}
       <LanguageModal />
 
-      {/* First-Time Friendly Conversational Welcome Modal */}
-      <FirstTimeWelcomeModal />
+      {/* First-Time Friendly Interactive Spotlight Product Tour */}
+      <FirstTimeWelcomeModal currentTab={currentTab} onNavigate={handleRouteFeature} />
 
       {/* Settings & Preferences Modal */}
       <SettingsModal />

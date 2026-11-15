@@ -1,11 +1,5 @@
 import type { SupportedLanguage } from '../i18n/translations.ts';
 
-// Browser speech synthesis is retained only as the existing output fallback
-// when Timbre is disabled. This mapping is not used for speech recognition.
-const TTS_LANG_MAP: Record<SupportedLanguage, string> = {
-  en: 'en-IN', te: 'te-IN', hi: 'hi-IN', ta: 'ta-IN', kn: 'kn-IN', ml: 'ml-IN', mr: 'mr-IN',
-};
-
 /** Split long speech safely under the backend's 2,000-character request limit. */
 export function splitSpeechText(text: string, maxChars = 1800): string[] {
   const normalized = text.replace(/\r\n?/g, '\n').replace(/\n+/g, '. ').trim();
@@ -46,7 +40,6 @@ export function splitSpeechText(text: string, maxChars = 1800): string[] {
 // Text-to-Speech (TTS) Service
 export class SpeechService {
   private static activeAudio: HTMLAudioElement | null = null;
-  private static activeUtterance: SpeechSynthesisUtterance | null = null;
   private static activePlaybackCancel: (() => void) | null = null;
   private static activeOnEnd: (() => void) | null = null;
   private static speechToken = 0;
@@ -94,6 +87,11 @@ export class SpeechService {
       return;
     }
     if (token !== this.speechToken) return;
+    if (!timbreEnabled) {
+      onError?.(new Error('Gnani Timbre v3.0 is disabled. Enable it in the server voice configuration to hear spoken replies.'));
+      this.completeActiveSpeech();
+      return;
+    }
 
     for (let index = 0; index < chunks.length; index += 1) {
       if (token !== this.speechToken) return;
@@ -112,19 +110,14 @@ export class SpeechService {
         if (!data.audio_base64 || data.audio_base64.length <= 50 || responseLanguage !== language) {
           throw new Error('Speech service returned no playable audio in the selected language.');
         }
-        if (timbreEnabled && (data.provider !== 'gnani_live' || data.model !== 'timbre-v3.0' || data.voice_name !== 'Vasudha' || data.format !== 'audio/wav')) {
+        if (data.provider !== 'gnani_live' || data.model !== 'timbre-v3.0' || data.voice_name !== 'Vasudha' || data.format !== 'audio/wav') {
           throw new Error('Timbre v3.0 did not return the selected Vasudha voice.');
         }
         await this.playAudioChunk(`data:${data.format || 'audio/wav'};base64,${data.audio_base64}`, notifyStart, token);
       } catch (error) {
         if (token !== this.speechToken) return;
-        if (timbreEnabled) {
-          onError?.(error);
-          this.completeActiveSpeech();
-          return;
-        }
-        // Local/browser fallback is allowed only when Timbre is not selected.
-        await this.speakWithBrowserFallback(chunks.slice(index).join(' '), language, notifyStart, onError, token);
+        onError?.(error);
+        this.completeActiveSpeech();
         return;
       }
     }
@@ -158,81 +151,9 @@ export class SpeechService {
     });
   }
 
-  private static async speakWithBrowserFallback(
-    cleanText: string,
-    language: SupportedLanguage,
-    onStart?: () => void,
-    onError?: (err: any) => void,
-    token = this.speechToken
-  ) {
-    if (!('speechSynthesis' in window)) {
-      onError?.(new Error('Speech synthesis is not supported in this browser.'));
-      if (token === this.speechToken) this.completeActiveSpeech();
-      return;
-    }
-
-    const synthesis = window.speechSynthesis;
-    let voices = synthesis.getVoices();
-    if (!voices.length && typeof synthesis.addEventListener === 'function') {
-      await new Promise<void>((resolve) => {
-        let finished = false;
-        const done = () => {
-          if (finished) return;
-          finished = true;
-          clearTimeout(timer);
-          synthesis.removeEventListener?.('voiceschanged', done);
-          resolve();
-        };
-        const timer = setTimeout(done, 750);
-        synthesis.addEventListener('voiceschanged', done, { once: true });
-      });
-      if (token !== this.speechToken) return;
-      voices = synthesis.getVoices();
-    }
-
-    const targetLang = TTS_LANG_MAP[language] || 'en-IN';
-    const targetPrimary = targetLang.split('-')[0].toLowerCase();
-    const matchingVoice = voices.find((voice) =>
-      typeof voice.lang === 'string' && voice.lang.split('-')[0].toLowerCase() === targetPrimary
-    );
-    if (!matchingVoice) {
-      onError?.(new Error(`No browser speech voice is available for ${targetLang}.`));
-      if (token === this.speechToken) this.completeActiveSpeech();
-      return;
-    }
-
-    synthesis.cancel();
-    try {
-      for (const chunk of splitSpeechText(cleanText)) {
-        if (token !== this.speechToken) return;
-        await new Promise<void>((resolve, reject) => {
-          const utterance = new SpeechSynthesisUtterance(chunk);
-          utterance.lang = targetLang;
-          utterance.rate = 0.95;
-          utterance.pitch = 1.0;
-          utterance.voice = matchingVoice;
-          utterance.onstart = () => { if (token === this.speechToken) onStart?.(); };
-          utterance.onend = () => { this.activeUtterance = null; resolve(); };
-          utterance.onerror = (event) => {
-            this.activeUtterance = null;
-            if (token !== this.speechToken) resolve();
-            else reject(event);
-          };
-          this.activeUtterance = utterance;
-          window.speechSynthesis.speak(utterance);
-        });
-      }
-      if (token === this.speechToken) this.completeActiveSpeech();
-    } catch (error) {
-      if (token !== this.speechToken) return;
-      onError?.(error);
-      this.completeActiveSpeech();
-    }
-  }
-
   static stop(notifyOnEnd = false) {
     this.speechToken += 1;
-    const hadActiveSpeech = Boolean(this.activeAudio || this.activeUtterance || this.activeOnEnd);
+    const hadActiveSpeech = Boolean(this.activeAudio || this.activeOnEnd);
     if (this.activeAudio) {
       this.activeAudio.pause();
       this.activeAudio.currentTime = 0;
@@ -240,10 +161,6 @@ export class SpeechService {
     }
     this.activePlaybackCancel?.();
     this.activePlaybackCancel = null;
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-    this.activeUtterance = null;
     if (notifyOnEnd && hadActiveSpeech) this.completeActiveSpeech();
     else this.activeOnEnd = null;
   }
@@ -255,13 +172,6 @@ export class SpeechService {
   }
 
   static isSpeaking(): boolean {
-    if (this.activeAudio && !this.activeAudio.paused) {
-      return true;
-    }
-    if ('speechSynthesis' in window) {
-      return window.speechSynthesis.speaking;
-    }
-    return false;
+    return Boolean(this.activeAudio && !this.activeAudio.paused);
   }
 }
-

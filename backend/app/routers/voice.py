@@ -30,6 +30,7 @@ from ..services.gnani_voice import (
     get_voice_provider,
     GNANI_LANG_MAP,
     DormantGnaniVoiceProvider,
+    detect_audio_mime,
 )
 from ..config import settings
 
@@ -42,37 +43,26 @@ WS_INACTIVITY_TIMEOUT_SECONDS = 15.0
 
 
 def validate_audio_format(audio_bytes: bytes) -> str:
-    """
-    Validates audio format by inspecting magic bytes.
-    Supports WAV, WebM, MP3, OGG, and FLAC.
-    """
+    """Validates and returns the MIME type detected from the audio container."""
     if len(audio_bytes) < 44:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Audio input is too short or corrupted (minimum 44 bytes required).",
         )
 
-    if audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
-        return "audio/wav"
-    elif audio_bytes[:4] == b"\x1a\x45\xdf\xa3":
-        return "audio/webm"
-    elif audio_bytes[:3] == b"ID3" or audio_bytes[:2] in (
-        b"\xff\xfb",
-        b"\xff\xf3",
-        b"\xff\xf2",
-    ):
-        return "audio/mp3"
-    elif audio_bytes[:4] == b"OggS":
-        return "audio/ogg"
-    elif audio_bytes[:4] == b"fLaC":
-        return "audio/flac"
-    elif b"ftyp" in audio_bytes[:12]:
-        return "audio/mp4"
-
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Unsupported audio format. Supported formats are WAV, WebM, MP3, OGG, and FLAC.",
-    )
+    try:
+        detected_mime = detect_audio_mime(audio_bytes)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    if detected_mime == "audio/webm":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="WebM recordings are not supported by Prisma v3.0. Record MP4, WAV, MP3, AAC, OGG, or FLAC audio.",
+        )
+    return detected_mime
 
 
 def validate_language_code(language: str) -> str:
@@ -101,7 +91,6 @@ async def speech_to_text(
     Accepts base64 encoded audio and target language.
     """
     validate_language_code(req.language)
-    provider = get_voice_provider("stt")
 
     if not req.audio_base64:
         raise HTTPException(
@@ -142,14 +131,11 @@ async def speech_to_text(
 
     validate_audio_format(audio_bytes)
 
-    if isinstance(provider, DormantGnaniVoiceProvider):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Prisma requires the manual multipart recording upload with a verified duration.",
-        )
-
     try:
+        provider = get_voice_provider("stt", req.language)
         return await provider.speech_to_text(audio_bytes, req.language)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -180,7 +166,6 @@ async def speech_to_text_upload(
     Enforces chunked reading to prevent memory exhaustion.
     """
     validate_language_code(language)
-    provider = get_voice_provider("stt")
 
     content = bytearray()
     chunk_size = 64 * 1024
@@ -212,23 +197,17 @@ async def speech_to_text_upload(
 
     validate_audio_format(audio_bytes)
 
-    if isinstance(provider, DormantGnaniVoiceProvider):
-        if duration_seconds is None:
-            raise HTTPException(
-                status_code=422,
-                detail="Recording duration is required for Prisma transcription.",
-            )
-
-        if duration_seconds <= 0 or duration_seconds > 30:
-            raise HTTPException(
-                status_code=422,
-                detail="Prisma v3.0 accepts recordings up to 30 seconds.",
-            )
+    if duration_seconds is not None and (duration_seconds <= 0 or duration_seconds > 30):
+        raise HTTPException(
+            status_code=422,
+            detail="Audio recordings must be longer than zero and no more than 30 seconds.",
+        )
 
     enforce_rate_limit(request, "voice-stt-ip", 60, 60)
     enforce_rate_limit(None, "voice-stt", 20, 60, account_id)
 
     try:
+        provider = get_voice_provider("stt", language)
         return await provider.speech_to_text(audio_bytes, language)
     except ValueError as e:
         raise HTTPException(
@@ -289,15 +268,15 @@ async def text_to_speech(
             detail="Speech speed must be between 0.5 and 2.0.",
         )
 
-    provider = get_voice_provider("tts")
-
-    if isinstance(provider, DormantGnaniVoiceProvider) and not 0.85 <= speed <= 1.15:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Timbre v3.0 speech speed must be between 0.85 and 1.15.",
-        )
-
     try:
+        provider = get_voice_provider("tts")
+
+        if isinstance(provider, DormantGnaniVoiceProvider) and not 0.85 <= speed <= 1.15:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Timbre v3.0 speech speed must be between 0.85 and 1.15.",
+            )
+
         shared_client = getattr(
             request.app.state,
             "gnani_tts_client",
@@ -305,13 +284,15 @@ async def text_to_speech(
         )
 
         return await provider.text_to_speech(
-            text=req.text,
+            text=clean_text,
             language=req.language,
             voice=req.voice,
             speed=speed,
             http_client=shared_client,
         )
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -367,7 +348,12 @@ async def websocket_stt_stream(
         await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA)
         return
 
-    provider = get_voice_provider()
+    try:
+        provider = get_voice_provider("stt", lang_clean)
+    except RuntimeError as exc:
+        await websocket.send_json({"status": "error", "message": str(exc)})
+        await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        return
     accumulated_bytes = bytearray()
     start_time = time.time()
 
@@ -494,32 +480,33 @@ async def get_voice_config(
     )
 
     if prisma_enabled and timbre_enabled:
-        provider = "gnani_prisma_v3_and_timbre_v3_with_browser_fallback"
+        provider = "gnani_prisma_v3_and_timbre_v3"
     elif prisma_enabled:
-        provider = "gnani_prisma_v3_with_browser_fallback"
+        provider = "gnani_prisma_v3"
     elif timbre_enabled:
-        provider = "gnani_timbre_v3_with_browser_fallback"
+        provider = "gnani_timbre_v3"
     else:
-        provider = "browser_native_with_local_tts_fallback"
+        provider = "gnani_voice_providers_disabled"
 
     return {
         "live_enabled": settings.GNANI_LIVE_ENABLED,
+        "allow_paid_live_calls": settings.GNANI_ALLOW_PAID_LIVE_CALLS,
         "prisma_enabled": prisma_enabled,
         "timbre_enabled": timbre_enabled,
         "provider": provider,
         "credits_protected": True,
+        "gemini_stt_enabled": False,
         "stt_engine": (
-            "Gnani Prisma v3.0 manual recording; "
-            "Browser Web Speech Recognition remains available"
+            "Gnani Prisma v3.0; English hands-free uses browser SpeechRecognition"
             if prisma_enabled
-            else "Browser Web Speech Recognition"
+            else "Gnani Prisma v3.0 is disabled; English browser SpeechRecognition remains available"
         ),
         "tts_engine": (
-            "Gnani Timbre v3.0 WAV with browser speech fallback"
+            "Gnani Timbre v3.0 WAV"
             if timbre_enabled
-            else "Browser SpeechSynthesis with optional local backend TTS"
+            else "Gnani Timbre v3.0 is disabled"
         ),
         "available_voices": [],
         "supported_languages": settings.SUPPORTED_LANGUAGES,
-        "browser_speech_fallback_active": True,
+        "browser_speech_fallback_active": False,
     }

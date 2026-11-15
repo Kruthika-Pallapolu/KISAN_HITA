@@ -30,21 +30,27 @@ test('first-visit language chooser exposes all seven native labels and blocks lo
   for (const language of LANGUAGES) assert.ok(translations[language.code].firstVisitLanguageQuestion);
 });
 
-test('language preference onboarding does not request wake phrase or microphone setup', () => {
+test('language modal stays simple and the post-language welcome offers optional wake settings', () => {
   const modal = readFileSync(new URL('../components/LanguageModal.tsx', import.meta.url), 'utf8');
   const settings = readFileSync(new URL('../components/SettingsModal.tsx', import.meta.url), 'utf8');
+  const welcome = readFileSync(new URL('../components/FirstTimeWelcomeModal.tsx', import.meta.url), 'utf8');
   assert.match(modal, /setLanguage\(code\)/);
   assert.doesNotMatch(modal, /wakePhrase|VoiceRecognitionService|Microphone/);
-  assert.doesNotMatch(settings, /wakePhrase|wake phrase/i);
+  assert.match(settings, /handsFreePhrase/);
+  assert.match(welcome, /handsFreeOptional/);
+  assert.match(welcome, /kisan-hita:open-settings/);
 });
 
-test('assistant identity remains fixed and no wake assistant component is mounted', () => {
+test('assistant identity remains fixed and wake listening requires explicit foreground activation', () => {
   const identity = readFileSync(new URL('../services/productIdentity.ts', import.meta.url), 'utf8');
   const navbar = readFileSync(new URL('../components/Navbar.tsx', import.meta.url), 'utf8');
   const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const widget = readFileSync(new URL('../components/HandsFreeAssistant.tsx', import.meta.url), 'utf8');
   assert.match(identity, /KISAN_HITA_NAME\s*=\s*'Kisan Hita'/);
   assert.match(navbar, /KISAN_HITA_NAME/);
-  assert.doesNotMatch(app, /HeyKisanVoiceMode|hands-free-voice-widget/);
+  assert.match(app, /<HandsFreeAssistant\s*\/>/);
+  assert.match(widget, /onClick=\{\(\) => void start\(\)\}/);
+  assert.doesNotMatch(widget, /useEffect\([\s\S]{0,150}\.start\(/);
   assert.doesNotMatch(navbar, /profile\.assistantName/);
 });
 

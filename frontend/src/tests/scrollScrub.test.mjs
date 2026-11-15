@@ -12,8 +12,9 @@ test('reference scroll progress maps the whole document into a clamped video tim
 });
 
 test('scroll interpolation retains the reference desktop/mobile easing and reduced-motion behavior', () => {
-  assert.equal(easeScrollProgress(0, 1, false, false), 0.14);
-  assert.equal(easeScrollProgress(0, 1, true, false), 0.22);
+  assert.ok(Math.abs(easeScrollProgress(0, 1, false, false) - 0.14) < 1e-10);
+  assert.ok(Math.abs(easeScrollProgress(0, 1, true, false) - 0.22) < 1e-10);
+  assert.ok(Math.abs(easeScrollProgress(0, 1, false, false, 1000 / 30) - (1 - 0.86 ** 2)) < 1e-10);
   assert.equal(easeScrollProgress(0, 1, true, true), 1);
   assert.equal(shouldSeekFrame(0.1, 0, false), true);
   assert.equal(shouldSeekFrame(0.1, 0, true), true);
@@ -27,6 +28,7 @@ test('integrated background is muted, scroll-scrubbed, and uses both exact local
   assert.match(component, /muted/);
   assert.match(component, /preload="metadata"/);
   assert.match(component, /reducedMotion: \(\) => reducedMotionQuery\.matches/);
+  assert.match(component, /visibilityEvents: document/);
   assert.match(component, /prefers-reduced-motion:\s*reduce/);
   assert.match(component, /window\.visualViewport\?\.addEventListener\('resize'/);
   assert.doesNotMatch(component, /video\.play\(/);
@@ -66,15 +68,17 @@ class FakeVideo extends EventTarget {
   pause() { this.pauseCount += 1; }
 }
 
-const makeRuntime = ({ video = new FakeVideo(), events = new EventTarget(), progress = () => 0, motion = () => false } = {}) => {
+const makeRuntime = ({ video = new FakeVideo(), events = new EventTarget(), visibilityEvents = new EventTarget(), progress = () => 0, motion = () => false, visible = () => true, mobileMode = false } = {}) => {
   const frames = new Map();
   const timers = [];
   let nextFrame = 1;
   const runtime = new ScrollScrubRuntime({
     video,
     events,
+    visibilityEvents,
+    isVisible: visible,
     readProgress: progress,
-    mobile: () => false,
+    mobile: () => mobileMode,
     reducedMotion: motion,
     onUnavailable: () => {},
     requestFrame: (callback) => { const id = nextFrame++; frames.set(id, callback); return id; },
@@ -84,14 +88,16 @@ const makeRuntime = ({ video = new FakeVideo(), events = new EventTarget(), prog
   });
   const flushFrames = (limit = 100) => {
     let count = 0;
+    let timestamp = 1000 / 60;
     while (frames.size && count++ < limit) {
       const [id, callback] = frames.entries().next().value;
       frames.delete(id);
-      callback(0);
+      callback(timestamp);
+      timestamp += 1000 / 60;
     }
     return count;
   };
-  return { runtime, video, events, frames, timers, flushFrames };
+  return { runtime, video, events, visibilityEvents, frames, timers, flushFrames };
 };
 
 test('delayed metadata syncs to the latest scroll, including scrolls before video readiness', () => {
@@ -184,6 +190,8 @@ test('transient seek failures retry; actual video load errors use the poster fal
   const brokenRuntime = new ScrollScrubRuntime({
     video: broken,
     events: new EventTarget(),
+    visibilityEvents: new EventTarget(),
+    isVisible: () => true,
     readProgress: () => 0,
     mobile: () => false,
     reducedMotion: () => false,
@@ -195,4 +203,61 @@ test('transient seek failures retry; actual video load errors use the poster fal
   broken.dispatchEvent(new Event('error'));
   assert.equal(unavailable, 1);
   brokenRuntime.destroy();
+});
+
+test('decoder seeks are serialized without a frame-by-frame busy RAF loop', () => {
+  let progress = 0.1;
+  const { runtime, video, events, timers, frames, flushFrames } = makeRuntime({ video: Object.assign(new FakeVideo(), { readyState: 1 }), progress: () => progress });
+  runtime.mount();
+  flushFrames();
+  video.seeking = true;
+  progress = 0.8;
+  events.dispatchEvent(new Event('scroll'));
+  flushFrames();
+  assert.equal(frames.size, 0);
+  assert.equal(timers.length, 1);
+  video.seeking = false;
+  timers.shift().callback();
+  flushFrames();
+  assert.ok(video.currentTime > 7.5);
+  runtime.destroy();
+});
+
+test('tab visibility return resynchronizes to the current scroll position', () => {
+  let progress = 0.1;
+  let visible = true;
+  const { runtime, video, events, visibilityEvents, frames, flushFrames } = makeRuntime({
+    video: Object.assign(new FakeVideo(), { readyState: 1 }),
+    progress: () => progress,
+    visible: () => visible,
+  });
+  runtime.mount();
+  flushFrames();
+  visible = false;
+  visibilityEvents.dispatchEvent(new Event('visibilitychange'));
+  progress = 0.7;
+  events.dispatchEvent(new Event('scroll'));
+  flushFrames();
+  assert.equal(frames.size, 0);
+  visible = true;
+  visibilityEvents.dispatchEvent(new Event('visibilitychange'));
+  flushFrames();
+  assert.ok(Math.abs(video.currentTime - 7) < 0.01);
+  runtime.destroy();
+});
+
+test('mobile easing and seek threshold retain responsiveness at scroll-event cadence', () => {
+  let progress = 0;
+  const { runtime, video, events, flushFrames } = makeRuntime({
+    video: Object.assign(new FakeVideo(), { readyState: 1 }),
+    progress: () => progress,
+    mobileMode: true,
+  });
+  runtime.mount();
+  flushFrames();
+  progress = 0.5;
+  events.dispatchEvent(new Event('scroll'));
+  flushFrames();
+  assert.ok(Math.abs(video.currentTime - 5) < 0.02);
+  runtime.destroy();
 });

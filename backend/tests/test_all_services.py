@@ -144,7 +144,7 @@ class TestKisanHitaBackend(unittest.TestCase):
         self.assertGreater(len(stt_res.transcript), 0)
         self.assertEqual(provider.get_provider_info()["type"], "temporary_development")
 
-    def test_assistant_does_not_claim_to_retrieve_local_forecasts(self):
+    def test_assistant_asks_for_location_before_retrieving_forecast(self):
         async def scenario():
             for language, question in [
                 ("en", "Will it rain tomorrow in my district?"),
@@ -156,12 +156,25 @@ class TestKisanHitaBackend(unittest.TestCase):
                 ("mr", "उद्या माझ्या जिल्ह्यात पाऊस पडेल का?"),
             ]:
                 response = await AssistantOrchestrator.process_user_query(question, f"no_forecast_{language}", language=language)
-                self.assertEqual(response.intent, "general")
-                self.assertEqual(response.routed_feature, "ask_kisan")
-                self.assertIsNone(response.feature_data)
+                self.assertEqual(response.intent, "weather")
+                self.assertEqual(response.routed_feature, "weather")
+                self.assertEqual(response.feature_data["status"], "location_required")
                 self.assertIsNone(response.pending_workflow)
                 self.assertTrue(response.reply_text)
         asyncio.run(scenario())
+
+    def test_assistant_weather_question_uses_real_service_result(self):
+        sample = {"location":{"district":"Nellore","state":"Andhra Pradesh"},
+                  "current":{"temperature_2m":29,"apparent_temperature":32,"weather_code":63},
+                  "hourly":{"precipitation_probability":[10,30]},"provider":"Open-Meteo"}
+        with patch("app.services.intent_router.get_weather_forecast", new_callable=AsyncMock, return_value=sample) as fetch:
+            response = asyncio.run(AssistantOrchestrator.process_user_query(
+                "Will it rain tomorrow in Nellore?", "weather_assistant_nellore", language="en"))
+        fetch.assert_awaited_once_with(district="Nellore", state="Andhra Pradesh")
+        self.assertEqual(response.intent, "weather")
+        self.assertEqual(response.feature_data["provider"], "Open-Meteo")
+        self.assertIn("Nellore, Andhra Pradesh", response.reply_text)
+        self.assertIn("29°C", response.reply_text)
 
     def test_assistant_does_not_answer_unhandled_questions_with_a_generic_greeting(self):
         unavailable_replies = {
@@ -197,6 +210,15 @@ class TestKisanHitaBackend(unittest.TestCase):
             "ml": "സ്ഥിരീകരിച്ച ശുപാർശകളല്ല",
             "mr": "पडताळलेल्या शिफारसी नाहीत",
         }
+        expected_kvk_names = {
+            "te": "కృషి విజ్ఞాన కేంద్రం",
+            "en": "KVK",
+            "hi": "कृषि विज्ञान केंद्र",
+            "ta": "வேளாண் அறிவியல் மையம்",
+            "kn": "ಕೃಷಿ ವಿಜ್ಞಾನ ಕೇಂದ್ರ",
+            "ml": "കൃഷി വിജ്ഞാന കേന്ദ്രം",
+            "mr": "कृषी विज्ञान केंद्र",
+        }
         for index, (language, caveat) in enumerate(expected_localized_caveats.items()):
             response = asyncio.run(AssistantOrchestrator.process_user_query(
                 "Which crops may suit black cotton soil in Nellore with rainfed conditions during Rabi?",
@@ -210,7 +232,7 @@ class TestKisanHitaBackend(unittest.TestCase):
             self.assertEqual(response.routed_feature, "crop_advisor")
             self.assertIn(caveat, response.reply_text)
             self.assertNotIn("DEMO", response.reply_text.upper())
-            self.assertIn("KVK", response.reply_text)
+            self.assertIn(expected_kvk_names[language], response.reply_text)
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,9 +5,18 @@ export const getScrollProgress = (scrollY: number, scrollHeight: number, viewpor
   return Math.min(1, Math.max(0, scrollY / maxScroll));
 };
 
-export const easeScrollProgress = (current: number, target: number, mobile: boolean, reducedMotion: boolean): number => {
+export const easeScrollProgress = (
+  current: number,
+  target: number,
+  mobile: boolean,
+  reducedMotion: boolean,
+  elapsedMs = 1000 / 60,
+): number => {
   if (reducedMotion) return target;
-  return current + (target - current) * (mobile ? 0.22 : 0.14);
+  const perFrameFactor = mobile ? 0.22 : 0.14;
+  const frameEquivalent = Math.min(50, Math.max(1000 / 240, elapsedMs)) / (1000 / 60);
+  const factor = 1 - Math.pow(1 - perFrameFactor, frameEquivalent);
+  return current + (target - current) * factor;
 };
 
 export const shouldSeekFrame = (seconds: number, previousSeconds: number, mobile: boolean): boolean =>
@@ -31,6 +40,8 @@ type ScrollVideo = EventTarget & {
 type ScrubRuntimeOptions = {
   video: ScrollVideo;
   events?: EventTarget;
+  visibilityEvents?: EventTarget;
+  isVisible?: () => boolean;
   readProgress: () => number;
   mobile: () => boolean;
   reducedMotion: () => boolean;
@@ -45,6 +56,8 @@ type ScrubRuntimeOptions = {
 export class ScrollScrubRuntime {
   private readonly video: ScrollVideo;
   private readonly events: EventTarget;
+  private readonly visibilityEvents: EventTarget;
+  private readonly isVisible: () => boolean;
   private readonly readProgress: () => number;
   private readonly mobile: () => boolean;
   private readonly reducedMotion: () => boolean;
@@ -62,13 +75,17 @@ export class ScrollScrubRuntime {
   private lastSeek = -1;
   private frameHandle = 0;
   private retryHandle: ReturnType<typeof setTimeout> | null = null;
+  private seekPollHandle: ReturnType<typeof setTimeout> | null = null;
   private seekFailures = 0;
   private seekBlocked = false;
   private loadingRequested = false;
+  private lastFrameTime: number | null = null;
 
   constructor(options: ScrubRuntimeOptions) {
     this.video = options.video;
     this.events = options.events ?? window;
+    this.visibilityEvents = options.visibilityEvents ?? document;
+    this.isVisible = options.isVisible ?? (() => !document.hidden);
     this.readProgress = options.readProgress;
     this.mobile = options.mobile;
     this.reducedMotion = options.reducedMotion;
@@ -92,6 +109,7 @@ export class ScrollScrubRuntime {
     this.events.addEventListener('resize', this.refresh, { passive: true });
     this.events.addEventListener('pageshow', this.refresh);
     this.events.addEventListener('popstate', this.refresh);
+    this.visibilityEvents.addEventListener('visibilitychange', this.onVisibilityChange);
 
     this.video.pause();
     this.refresh();
@@ -110,8 +128,10 @@ export class ScrollScrubRuntime {
     this.active = false;
     if (this.frameHandle) this.cancelFrame(this.frameHandle);
     if (this.retryHandle) this.clearTimer(this.retryHandle);
+    if (this.seekPollHandle) this.clearTimer(this.seekPollHandle);
     this.frameHandle = 0;
     this.retryHandle = null;
+    this.seekPollHandle = null;
     this.video.removeEventListener('loadedmetadata', this.onReadyEvent);
     this.video.removeEventListener('loadeddata', this.onReadyEvent);
     this.video.removeEventListener('canplay', this.onReadyEvent);
@@ -122,6 +142,7 @@ export class ScrollScrubRuntime {
     this.events.removeEventListener('resize', this.refresh);
     this.events.removeEventListener('pageshow', this.refresh);
     this.events.removeEventListener('popstate', this.refresh);
+    this.visibilityEvents.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.video.pause();
   }
 
@@ -144,6 +165,20 @@ export class ScrollScrubRuntime {
     }
   };
 
+  private onVisibilityChange = (): void => {
+    this.lastFrameTime = null;
+    if (!this.isVisible()) {
+      if (this.frameHandle) this.cancelFrame(this.frameHandle);
+      if (this.seekPollHandle) this.clearTimer(this.seekPollHandle);
+      this.frameHandle = 0;
+      this.seekPollHandle = null;
+      return;
+    }
+    this.checkReady();
+    this.refresh();
+    if (this.video.seeking) this.scheduleSeekPoll();
+  };
+
   private checkReady(): void {
     if (!this.active || this.ready || this.unavailable) return;
     if (this.video.readyState < 1 || !Number.isFinite(this.video.duration) || this.video.duration <= 0) return;
@@ -158,6 +193,8 @@ export class ScrollScrubRuntime {
   private onSeeked = (): void => {
     this.seekFailures = 0;
     this.seekBlocked = false;
+    if (this.seekPollHandle) this.clearTimer(this.seekPollHandle);
+    this.seekPollHandle = null;
     if (this.retryHandle) this.clearTimer(this.retryHandle);
     this.retryHandle = null;
     this.refresh();
@@ -170,16 +207,33 @@ export class ScrollScrubRuntime {
     this.unavailable = true;
     if (this.frameHandle) this.cancelFrame(this.frameHandle);
     if (this.retryHandle) this.clearTimer(this.retryHandle);
+    if (this.seekPollHandle) this.clearTimer(this.seekPollHandle);
     this.frameHandle = 0;
     this.retryHandle = null;
+    this.seekPollHandle = null;
     this.video.pause();
     this.onUnavailable();
   }
 
   private scheduleFrame(): void {
-    if (this.active && this.ready && !this.unavailable && !this.frameHandle && !this.seekBlocked) {
+    if (this.active && this.ready && !this.unavailable && this.isVisible() && !this.frameHandle && !this.seekBlocked) {
       this.frameHandle = this.requestFrame(this.tick);
     }
+  }
+
+  private scheduleSeekPoll(): void {
+    if (!this.active || !this.isVisible() || this.seekPollHandle || this.unavailable) return;
+    // The seeked event normally wakes the renderer. Poll slowly as a recovery
+    // path for mobile decoders that omit or delay that event; avoid a busy RAF loop.
+    this.seekPollHandle = this.setTimer(() => {
+      this.seekPollHandle = null;
+      if (!this.active || !this.isVisible() || this.unavailable) return;
+      if (this.video.seeking) this.scheduleSeekPoll();
+      else {
+        this.lastFrameTime = null;
+        this.scheduleFrame();
+      }
+    }, 32);
   }
 
   private scheduleSeekRetry(): void {
@@ -196,6 +250,10 @@ export class ScrollScrubRuntime {
   }
 
   private seekToTarget(): void {
+    if (this.video.seeking) {
+      this.scheduleSeekPoll();
+      return;
+    }
     const seconds = getVideoTime(this.target, this.duration);
     if (!shouldSeekFrame(seconds, this.lastSeek, this.mobile())) return;
     try {
@@ -208,15 +266,17 @@ export class ScrollScrubRuntime {
     }
   }
 
-  private tick: FrameRequestCallback = () => {
+  private tick: FrameRequestCallback = (timestamp) => {
     this.frameHandle = 0;
-    if (!this.active || !this.ready || this.unavailable || this.seekBlocked) return;
+    if (!this.active || !this.ready || this.unavailable || this.seekBlocked || !this.isVisible()) return;
     if (this.video.seeking) {
-      this.scheduleFrame();
+      this.scheduleSeekPoll();
       return;
     }
     this.target = clampProgress(this.readProgress());
-    this.current = easeScrollProgress(this.current, this.target, this.mobile(), this.reducedMotion());
+    const elapsedMs = this.lastFrameTime !== null ? timestamp - this.lastFrameTime : 1000 / 60;
+    this.lastFrameTime = timestamp;
+    this.current = easeScrollProgress(this.current, this.target, this.mobile(), this.reducedMotion(), elapsedMs);
     if (Math.abs(this.target - this.current) < 0.0005) this.current = this.target;
     const seconds = getVideoTime(this.current, this.duration);
     if (shouldSeekFrame(seconds, this.lastSeek, this.mobile())) {

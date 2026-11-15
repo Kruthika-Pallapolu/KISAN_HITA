@@ -1,7 +1,7 @@
 import React from 'react';
 import { useLanguage } from '../context/LanguageContext';
 import { useAssistant } from '../context/AssistantContext';
-import { Bot, Sprout, ShieldAlert, TrendingUp, Mic, ArrowRight, CheckCircle2, Sparkles, Volume2 } from 'lucide-react';
+import { Bot, Sprout, ShieldAlert, TrendingUp, Mic, ArrowRight, CheckCircle2, Sparkles, Volume2, CloudSun } from 'lucide-react';
 
 interface HomePageProps {
   onSelectTab: (tab: string) => void;
@@ -39,6 +39,14 @@ export const HomePage: React.FC<HomePageProps> = ({ onSelectTab }) => {
       desc: t('marketSub'),
       icon: <TrendingUp size={26} style={{ color: 'var(--amber)' }} />,
       stat: t('statMarket'),
+    },
+    {
+      id: 'weather',
+      badge: t('navWeather'),
+      title: t('weatherTitle'),
+      desc: t('weatherSubtitle'),
+      icon: <CloudSun size={26} style={{ color: 'var(--amber)' }} />,
+      stat: t('weatherAttribution'),
     },
   ];
 

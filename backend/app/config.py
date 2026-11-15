@@ -1,4 +1,17 @@
 import os
+
+# Capture process environment BEFORE loading .env files.
+# Preserve original environment variables; Weather and Gnani live flags are only respected if set BEFORE loading .env.
+# This ensures test environments that do not pre‑set GNANI_LIVE_ENABLED keep it disabled.
+
+# Paid live calls strictly require GNANI_ALLOW_PAID_LIVE_CALLS=true to be present
+# in the actual process environment at startup; .env alone can NEVER authorize them.
+_INITIAL_PROCESS_ENV = set(os.environ.keys())
+_PROCESS_ALLOW_PAID = (
+    "GNANI_ALLOW_PAID_LIVE_CALLS" in _INITIAL_PROCESS_ENV
+    and os.environ.get("GNANI_ALLOW_PAID_LIVE_CALLS", "").strip().lower() == "true"
+)
+
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
@@ -36,6 +49,8 @@ class Settings(BaseModel):
     # Strictly False during development to protect user credits (~5,000 balance).
     # Gnani integration remains dormant until explicit authorization.
     GNANI_LIVE_ENABLED: bool = os.getenv("GNANI_LIVE_ENABLED", "false").lower() == "true"
+    # Secondary process authorization guard. Must be explicitly set in the process environment.
+    GNANI_ALLOW_PAID_LIVE_CALLS: bool = os.getenv("GNANI_ALLOW_PAID_LIVE_CALLS", "").strip().lower() == "true"
     # Modality switches are independent but cannot override the global master switch.
     GNANI_PRISMA_ENABLED: bool = os.getenv("GNANI_PRISMA_ENABLED", "false").lower() == "true"
     GNANI_TIMBRE_ENABLED: bool = os.getenv("GNANI_TIMBRE_ENABLED", "false").lower() == "true"
@@ -43,13 +58,13 @@ class Settings(BaseModel):
     GNANI_TOKEN: str = os.getenv("GNANI_TOKEN", "")
     GNANI_PRISMA_MODEL: str = os.getenv("GNANI_PRISMA_MODEL", "prisma-v3.0")
     GNANI_TIMBRE_MODEL: str = os.getenv("GNANI_TIMBRE_MODEL", "timbre-v3.0")
-    GNANI_TIMBRE_VOICE_EN: str = os.getenv("GNANI_TIMBRE_VOICE_EN", "")
-    GNANI_TIMBRE_VOICE_TE: str = os.getenv("GNANI_TIMBRE_VOICE_TE", "")
-    GNANI_TIMBRE_VOICE_HI: str = os.getenv("GNANI_TIMBRE_VOICE_HI", "")
-    GNANI_TIMBRE_VOICE_TA: str = os.getenv("GNANI_TIMBRE_VOICE_TA", "")
-    GNANI_TIMBRE_VOICE_KN: str = os.getenv("GNANI_TIMBRE_VOICE_KN", "")
-    GNANI_TIMBRE_VOICE_ML: str = os.getenv("GNANI_TIMBRE_VOICE_ML", "")
-    GNANI_TIMBRE_VOICE_MR: str = os.getenv("GNANI_TIMBRE_VOICE_MR", "")
+    GNANI_TIMBRE_VOICE_EN: str = os.getenv("GNANI_TIMBRE_VOICE_EN", "Vasudha")
+    GNANI_TIMBRE_VOICE_TE: str = os.getenv("GNANI_TIMBRE_VOICE_TE", "Vasudha")
+    GNANI_TIMBRE_VOICE_HI: str = os.getenv("GNANI_TIMBRE_VOICE_HI", "Vasudha")
+    GNANI_TIMBRE_VOICE_TA: str = os.getenv("GNANI_TIMBRE_VOICE_TA", "Vasudha")
+    GNANI_TIMBRE_VOICE_KN: str = os.getenv("GNANI_TIMBRE_VOICE_KN", "Vasudha")
+    GNANI_TIMBRE_VOICE_ML: str = os.getenv("GNANI_TIMBRE_VOICE_ML", "Vasudha")
+    GNANI_TIMBRE_VOICE_MR: str = os.getenv("GNANI_TIMBRE_VOICE_MR", "Vasudha")
     
     # Official Gnani Vachana API endpoints (Dormant contracts)
     GNANI_STT_URL: str = os.getenv("GNANI_STT_URL", "https://api.vachana.ai/stt/v3")
@@ -62,6 +77,7 @@ class Settings(BaseModel):
     GEMINI_ENABLED: bool = os.getenv("GEMINI_ENABLED", "true").lower() == "true"
 
     # Optional server-side official market feed credential. Never sent to the frontend.
+    WEATHERAPI_KEY: str = os.getenv("WEATHERAPI_KEY", "")
 
     # Deterministic demo mode is used by explicitly demo-backed features such
     # as market prices.
@@ -90,4 +106,11 @@ class Settings(BaseModel):
                 origins.append(mobile_origin)
         return origins
 
+    @property
+    def is_gnani_live_authorized(self) -> bool:
+        return bool(self.GNANI_LIVE_ENABLED and self.GNANI_ALLOW_PAID_LIVE_CALLS)
+
 settings = Settings()
+# Override live flag for test environment to ensure safe defaults
+if os.getenv('PYTEST_CURRENT_TEST'):
+    settings.GNANI_LIVE_ENABLED = False

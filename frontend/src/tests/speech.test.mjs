@@ -24,30 +24,30 @@ test('assistant voice input uses Prisma only; browser SpeechRecognition STT is a
   assert.doesNotMatch(page, /<Mic|startVoiceInput|stopVoiceInput/);
 });
 
-test('backend audio playback starts and ends through the browser Audio element', async () => {
+test('disabled Timbre reports an error without browser or local speech fallback', async () => {
   const oldWindow = globalThis.window;
   const oldAudio = globalThis.Audio;
   const oldFetch = globalThis.fetch;
   const audioInstances = [];
+  let browserSpeechCalls = 0;
   class FakeAudio {
     constructor(url) { this.url = url; this.playCalls = 0; audioInstances.push(this); }
     play() { this.playCalls += 1; queueMicrotask(() => { this.onplay?.(); this.onended?.(); }); return Promise.resolve(); }
     pause() {}
   }
   globalThis.Audio = FakeAudio;
-  globalThis.fetch = async (url) => url.endsWith('/config')
-    ? ({ ok: true, json: async () => ({ timbre_enabled: false }) })
-    : ({ ok: true, json: async () => ({ audio_base64: 'A'.repeat(80), format: 'audio/wav', language: 'en' }) });
-  globalThis.window = { speechSynthesis: { cancel() {}, getVoices: () => [{ lang: 'en-IN' }], speak() {} } };
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ timbre_enabled: false }) });
+  globalThis.window = { speechSynthesis: { cancel() {}, getVoices: () => [{ lang: 'en-IN' }], speak() { browserSpeechCalls += 1; } } };
   try {
     let started = 0;
     let ended = 0;
-    let errored = 0;
-    await SpeechService.speak('Namaste', 'en', () => started++, () => ended++, () => errored++);
-    assert.equal(audioInstances[0].playCalls, 1);
-    assert.equal(started, 1);
+    let error;
+    await SpeechService.speak('Namaste', 'en', () => started++, () => ended++, (value) => { error = value; });
+    assert.match(error.message, /Timbre v3.0 is disabled/);
+    assert.equal(audioInstances.length, 0);
+    assert.equal(browserSpeechCalls, 0);
+    assert.equal(started, 0);
     assert.equal(ended, 1);
-    assert.equal(errored, 0);
   } finally {
     SpeechService.stop();
     globalThis.window = oldWindow;
@@ -56,94 +56,71 @@ test('backend audio playback starts and ends through the browser Audio element',
   }
 });
 
-test('audio playback rejection falls back to browser speech synthesis', async () => {
+test('Timbre audio playback failure is surfaced without browser speech fallback', async () => {
   const oldWindow = globalThis.window;
   const oldAudio = globalThis.Audio;
   const oldFetch = globalThis.fetch;
-  const oldUtterance = globalThis.SpeechSynthesisUtterance;
-  let utterance;
+  let browserSpeechCalls = 0;
   class FakeAudio {
     constructor() { this.onplay = null; this.onended = null; this.onerror = null; }
     play() { return Promise.reject(new Error('autoplay blocked')); }
     pause() {}
   }
-  class FakeUtterance {
-    constructor(text) { this.text = text; utterance = this; }
-  }
   globalThis.Audio = FakeAudio;
-  globalThis.SpeechSynthesisUtterance = FakeUtterance;
   globalThis.fetch = async (url) => url.endsWith('/config')
-    ? ({ ok: true, json: async () => ({ timbre_enabled: false }) })
-    : ({ ok: true, json: async () => ({ audio_base64: 'A'.repeat(80), format: 'audio/wav', language: 'en' }) });
-  globalThis.window = { speechSynthesis: { cancel() {}, getVoices: () => [{ lang: 'en-IN' }], speak() {} } };
-  const oldWarn = console.warn;
-  console.warn = () => {};
+    ? ({ ok: true, json: async () => ({ timbre_enabled: true }) })
+    : ({ ok: true, json: async () => ({
+      audio_base64: 'A'.repeat(80), format: 'audio/wav', language: 'en',
+      provider: 'gnani_live', model: 'timbre-v3.0', voice_name: 'Vasudha',
+    }) });
+  globalThis.window = { speechSynthesis: { cancel() {}, getVoices: () => [{ lang: 'en-IN' }], speak() { browserSpeechCalls += 1; } } };
   try {
     let started = 0;
     let ended = 0;
-    const speech = SpeechService.speak('Namaste', 'en', () => started++, () => ended++);
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(utterance.text, 'Namaste');
-    utterance.onstart();
-    utterance.onend();
-    await speech;
-    assert.equal(started, 1);
+    let error;
+    await SpeechService.speak('Namaste', 'en', () => started++, () => ended++, (value) => { error = value; });
+    assert.match(error.message, /Audio playback failed|autoplay blocked/);
+    assert.equal(browserSpeechCalls, 0);
+    assert.equal(started, 0);
     assert.equal(ended, 1);
   } finally {
-    console.warn = oldWarn;
     SpeechService.stop();
     globalThis.window = oldWindow;
     globalThis.Audio = oldAudio;
     globalThis.fetch = oldFetch;
-    globalThis.SpeechSynthesisUtterance = oldUtterance;
   }
 });
 
-test('browser fallback uses a matching selected-language voice and reports unsupported TTS honestly', async () => {
+test('a Timbre response for the wrong language is rejected without any local voice', async () => {
   const oldWindow = globalThis.window;
   const oldAudio = globalThis.Audio;
   const oldFetch = globalThis.fetch;
-  const oldUtterance = globalThis.SpeechSynthesisUtterance;
-  let spoken = 0;
-  let utterance;
-  class FakeAudio { play() { queueMicrotask(() => { this.onplay?.(); this.onended?.(); }); return Promise.resolve(); } pause() {} }
-  class FakeUtterance { constructor(text) { this.text = text; utterance = this; } }
+  let browserSpeechCalls = 0;
+  let audioCalls = 0;
+  class FakeAudio { play() { audioCalls += 1; return Promise.resolve(); } pause() {} }
   globalThis.Audio = FakeAudio;
-  globalThis.SpeechSynthesisUtterance = FakeUtterance;
   globalThis.fetch = async (url) => url.endsWith('/config')
-    ? ({ ok: true, json: async () => ({ timbre_enabled: false }) })
-    : ({ ok: true, json: async () => ({ audio_base64: 'A'.repeat(80), format: 'audio/wav', language: 'hi' }) });
+    ? ({ ok: true, json: async () => ({ timbre_enabled: true }) })
+    : ({ ok: true, json: async () => ({
+      audio_base64: 'A'.repeat(80), format: 'audio/wav', language: 'hi',
+      provider: 'gnani_live', model: 'timbre-v3.0', voice_name: 'Vasudha',
+    }) });
   globalThis.window = { speechSynthesis: {
-    cancel() {}, getVoices: () => [{ lang: 'te-IN' }], speak() { spoken += 1; },
+    cancel() {}, getVoices: () => [{ lang: 'te-IN' }], speak() { browserSpeechCalls += 1; },
   } };
   try {
     let playbackError;
     let ended = 0;
-    const supported = SpeechService.speak('నమస్కారం', 'te', undefined, () => ended++, (error) => { playbackError = error; });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(spoken, 1);
-    assert.equal(utterance.lang, 'te-IN');
-    assert.equal(utterance.voice.lang, 'te-IN');
-    utterance.onend();
-    await supported;
+    await SpeechService.speak('నమస్కారం', 'te', undefined, () => ended++, (error) => { playbackError = error; });
+    assert.match(playbackError.message, /selected language/);
     assert.equal(ended, 1);
-    assert.equal(playbackError, undefined);
-
-    globalThis.window.speechSynthesis.getVoices = () => [{ lang: 'en-IN' }];
-    playbackError = undefined;
-    ended = 0;
-    const unsupported = SpeechService.speak('నమస్కారం', 'te', undefined, () => ended++, (error) => { playbackError = error; });
-    await new Promise((resolve) => setImmediate(resolve));
-    await unsupported;
-    assert.match(playbackError.message, /No browser speech voice is available for te-IN/);
-    assert.equal(ended, 1);
-    assert.equal(spoken, 1, 'must not speak the Telugu answer with an English voice');
+    assert.equal(audioCalls, 0);
+    assert.equal(browserSpeechCalls, 0);
   } finally {
     SpeechService.stop();
     globalThis.window = oldWindow;
     globalThis.Audio = oldAudio;
     globalThis.fetch = oldFetch;
-    globalThis.SpeechSynthesisUtterance = oldUtterance;
   }
 });
 

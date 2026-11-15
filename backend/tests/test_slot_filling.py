@@ -172,7 +172,7 @@ class TestSequentialSlotFilling(unittest.TestCase):
         self.assertIsNotNone(r3.feature_data)
         self.assertNotIn("DEMO", r3.reply_text.upper())
         self.assertIn("ధృవీకరించిన సిఫార్సులు కావు", r3.reply_text)
-        self.assertIn("స్థానిక KVK", r3.reply_text)
+        self.assertIn("స్థానిక కృషి విజ్ఞాన కేంద్రం", r3.reply_text)
 
     def test_crop_choice_clears_stale_market_flow_and_keeps_district_in_crop_advisor(self):
         conv_id = "test_crop_choice_after_stale_market"

@@ -322,6 +322,12 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
         if not settings.GNANI_LIVE_ENABLED:
             raise RuntimeError("Gnani live integration is disabled.")
 
+        if not settings.GNANI_ALLOW_PAID_LIVE_CALLS:
+            raise RuntimeError(
+                "Gnani paid live calls are unauthorized. "
+                "Explicit GNANI_ALLOW_PAID_LIVE_CALLS process authorization is required."
+            )
+
         if not settings.GNANI_PRISMA_ENABLED:
             raise RuntimeError("Gnani Prisma is disabled.")
 
@@ -353,7 +359,17 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
         if mime == "audio/wav":
             try:
                 with wave.open(io.BytesIO(audio_bytes), "rb") as wav:
-                    duration = wav.getnframes() / wav.getframerate()
+                    framerate = wav.getframerate()
+                    nframes = wav.getnframes()
+                    duration = nframes / framerate if framerate > 0 else 0
+                    # Handle streaming or unfinalized WAV headers (e.g. 0x7FFFFFFF nframes)
+                    if duration > 30 or nframes > 10000000:
+                        sampwidth = wav.getsampwidth() or 2
+                        nchannels = wav.getnchannels() or 1
+                        byte_rate = framerate * nchannels * sampwidth
+                        actual_duration = (len(audio_bytes) - 44) / byte_rate if byte_rate > 0 else 0
+                        if actual_duration <= 30:
+                            duration = actual_duration
 
                 if duration > 30:
                     raise ValueError(
@@ -392,8 +408,16 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
                 )
 
             if res.status_code != 200:
+                error_detail = ""
+                try:
+                    err_json = res.json()
+                    if isinstance(err_json, dict):
+                        error_detail = str(err_json.get("message") or err_json.get("detail") or err_json.get("error") or "")
+                except Exception:
+                    error_detail = res.text[:200] if res.text else ""
+                detail_msg = f": {error_detail}" if error_detail else "."
                 raise RuntimeError(
-                    f"Prisma request failed with HTTP {res.status_code}."
+                    f"Prisma request failed with HTTP {res.status_code}{detail_msg}"
                 )
 
             try:
@@ -465,6 +489,12 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
         if not settings.GNANI_LIVE_ENABLED:
             raise RuntimeError("Gnani live integration is disabled.")
 
+        if not settings.GNANI_ALLOW_PAID_LIVE_CALLS:
+            raise RuntimeError(
+                "Gnani paid live calls are unauthorized. "
+                "Explicit GNANI_ALLOW_PAID_LIVE_CALLS process authorization is required."
+            )
+
         if not settings.GNANI_TIMBRE_ENABLED:
             raise RuntimeError("Gnani Timbre is disabled.")
 
@@ -490,13 +520,16 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
             "mr-IN": settings.GNANI_TIMBRE_VOICE_MR,
         }
 
-        voice_name = (
-            voice or configured_voices.get(gnani_lang) or ""
-        ).strip()
+        voice_name = (configured_voices.get(gnani_lang) or "").strip()
 
         if not voice_name:
             raise RuntimeError(
                 f"No Timbre v3.0 voice has been selected for {gnani_lang}."
+            )
+
+        if voice and voice.strip() != voice_name:
+            raise ValueError(
+                f"Requested voice does not match the configured voice for {gnani_lang}."
             )
 
         if voice_name not in GNANI_TIMBRE_V30_CATALOG:
@@ -504,7 +537,14 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
                 f"Voice '{voice_name}' is not in the Timbre v3.0 catalogue."
             )
 
-        if not text or not text.strip():
+        clean_text = (
+            text.replace("*", "")
+            .replace("#", "")
+            .replace("`", "")
+            .strip()
+        )
+
+        if not clean_text:
             raise ValueError("Text input cannot be empty.")
 
         if not 0.85 <= speed <= 1.15:
@@ -519,7 +559,7 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
                 timeout=httpx.Timeout(15.0, connect=5.0)
             ) as standalone_client:
                 return await self.text_to_speech(
-                    text=text,
+                    text=clean_text,
                     language=language,
                     voice=voice,
                     speed=speed,
@@ -532,7 +572,7 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
         }
 
         payload = {
-            "text": text,
+            "text": clean_text,
             "voice": voice_name,
             "model": settings.GNANI_TIMBRE_MODEL,
             "language": gnani_lang,
@@ -578,8 +618,17 @@ class DormantGnaniVoiceProvider(BaseVoiceProvider):
                     "Timbre returned an empty or invalid WAV response."
                 )
 
+            error_detail = ""
+            try:
+                err_json = res.json()
+                if isinstance(err_json, dict):
+                    error_detail = str(err_json.get("message") or err_json.get("detail") or err_json.get("error") or "")
+            except Exception:
+                error_detail = res.text[:200] if res.text else ""
+
+            detail_msg = f": {error_detail}" if error_detail else "."
             raise RuntimeError(
-                f"Timbre request failed with HTTP {res.status_code}."
+                f"Timbre request failed with HTTP {res.status_code}{detail_msg}"
             )
 
         except httpx.TimeoutException as exc:
@@ -633,16 +682,59 @@ def detect_gnani_audio_mime(audio_bytes: bytes) -> str:
     raise ValueError("Unsupported audio format for Prisma v3.0.")
 
 
+def detect_audio_mime(audio_bytes: bytes) -> str:
+    """Detects supported audio containers from their magic bytes."""
+    if len(audio_bytes) >= 12 and audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
+        return "audio/wav"
+    if len(audio_bytes) >= 4 and audio_bytes[:4] == b"\x1a\x45\xdf\xa3":
+        return "audio/webm"
+    if len(audio_bytes) >= 8 and (b"ftyp" in audio_bytes[:12] or audio_bytes[:4] == b"ftyp"):
+        return "audio/mp4"
+    if len(audio_bytes) >= 4 and audio_bytes[:4] == b"OggS":
+        return "audio/ogg"
+    if len(audio_bytes) >= 4 and audio_bytes[:4] == b"fLaC":
+        return "audio/flac"
+    if len(audio_bytes) >= 3 and audio_bytes[:3] == b"ID3":
+        return "audio/mpeg"
+    # AAC ADTS: 12-bit syncword 0xFFF with layer bits == 00
+    if len(audio_bytes) >= 2 and audio_bytes[0] == 0xFF and (audio_bytes[1] & 0xF6) == 0xF0:
+        return "audio/aac"
+    if len(audio_bytes) >= 2 and audio_bytes[0] == 0xFF and (audio_bytes[1] & 0xE0) == 0xE0:
+        return "audio/mpeg"
+    raise ValueError("Unsupported audio format. Provide WAV, WebM, MP4, MP3, AAC, OGG, or FLAC audio.")
+
+
 def get_voice_provider(
     modality: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> BaseVoiceProvider:
+    if modality == "stt":
+        if not settings.GNANI_LIVE_ENABLED:
+            raise RuntimeError("Gnani voice providers are disabled. Enable GNANI_LIVE_ENABLED to use Prisma v3.0.")
+        if not settings.GNANI_PRISMA_ENABLED:
+            raise RuntimeError("Prisma v3.0 is disabled. Enable GNANI_PRISMA_ENABLED to use speech recognition.")
+        if not settings.GNANI_API_KEY:
+            raise RuntimeError("Prisma v3.0 is unavailable because GNANI_API_KEY is not configured.")
+        if settings.GNANI_PRISMA_MODEL != "prisma-v3.0":
+            raise RuntimeError("Prisma v3.0 is unavailable because GNANI_PRISMA_MODEL must be prisma-v3.0.")
+        if language and language[:2].lower() not in INDIC_LANG_MAP:
+            raise ValueError(f"Unsupported language: {language}")
+        return DormantGnaniVoiceProvider()
 
-    enabled = settings.GNANI_LIVE_ENABLED and (
-        (modality == "stt" and settings.GNANI_PRISMA_ENABLED)
-        or (modality == "tts" and settings.GNANI_TIMBRE_ENABLED)
-    )
+    if modality == "tts":
+        if not settings.GNANI_LIVE_ENABLED:
+            raise RuntimeError("Gnani voice providers are disabled. Enable GNANI_LIVE_ENABLED to use Timbre v3.0.")
+        if not settings.GNANI_TIMBRE_ENABLED:
+            raise RuntimeError("Timbre v3.0 is disabled. Enable GNANI_TIMBRE_ENABLED to use speech synthesis.")
+        if not settings.GNANI_API_KEY:
+            raise RuntimeError("Timbre v3.0 is unavailable because GNANI_API_KEY is not configured.")
+        if settings.GNANI_TIMBRE_MODEL != "timbre-v3.0":
+            raise RuntimeError("Timbre v3.0 is unavailable because GNANI_TIMBRE_MODEL must be timbre-v3.0.")
+        return DormantGnaniVoiceProvider()
 
-    if enabled:
+    if settings.GNANI_LIVE_ENABLED and (
+        settings.GNANI_PRISMA_ENABLED or settings.GNANI_TIMBRE_ENABLED
+    ):
         return DormantGnaniVoiceProvider()
 
     return LocalDevelopmentVoiceProvider()

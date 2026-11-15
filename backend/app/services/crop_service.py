@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 from ..models.schemas import CropRecommendation, CropAdvisorResponse
+from .localization import localize, localize_safe
 
 # =========================================================================
 # Realistic Regional Demonstration & Reference Crop Dataset
@@ -252,7 +253,8 @@ class CropAdvisorService:
         water: str,
         season: str,
         district: Optional[str] = None,
-        state: Optional[str] = None
+        state: Optional[str] = None,
+        language: str = "en"
     ) -> CropAdvisorResponse:
         s_norm = (soil or "").strip().lower()
         w_norm = (water or "").strip().lower()
@@ -362,11 +364,16 @@ class CropAdvisorService:
         top_items = matches[:3]
 
         loc_str = f" in {district}" if district and district.strip() and "Default" not in district else ""
+        lang_code = (language or "en").lower()[:2]
+
+        loc_district = localize_safe(district, lang_code) if district else ""
+        loc_kvk = localize_safe("KVK", lang_code)
+        loc_officer = localize_safe("Mandal Agriculture Officer", lang_code)
 
         if top_items:
             recs = [
                 CropRecommendation(
-                    crop_name=item["crop_name"],
+                    crop_name=localize_safe(item["crop_name"], lang_code),
                     variety=item["variety"],
                     duration_days=item["duration_days"],
                     water_requirement=item["water_requirement"],
@@ -377,32 +384,56 @@ class CropAdvisorService:
                     publication_date=item.get("publication_date"),
                     applicable_regions=item.get("applicable_regions", []),
                     suitability_score=item.get("suitability_score", "High Suitability (Demo Reference)"),
-                    suitable_season=item.get("suitable_season", season),
+                    suitable_season=localize_safe(item.get("suitable_season", season), lang_code),
                     cultivation_guidance=item.get("cultivation_guidance", item.get("next_steps"))
                 )
                 for _, item in top_items
             ]
-            disclaimer = (
-                f"DEMO reference agronomic suggestions{loc_str}; these are not scientifically verified or guaranteed recommendations. "
-                "Verify certified seed availability, sowing dates, and local soil conditions with your Mandal Agriculture Officer or local Krishi Vigyan Kendra (KVK)."
-            )
-            if location_conflict:
-                disclaimer += (
-                    f" Location check: {district} is associated with {expected_state.title()}, but the request specified {state}. "
-                    "The suggestions use soil, water, season, and district matches only; confirm the correct state and local suitability."
+            if lang_code == "en":
+                disclaimer = (
+                    f"DEMO reference agronomic suggestions{loc_str}; these are not scientifically verified or guaranteed recommendations. "
+                    "Verify certified seed availability, sowing dates, and local soil conditions with your Mandal Agriculture Officer or local Krishi Vigyan Kendra (KVK)."
                 )
+                if location_conflict:
+                    disclaimer += (
+                        f" Location check: {district} is associated with {expected_state.title()}, but the request specified {state}. "
+                        "The suggestions use soil, water, season, and district matches only; confirm the correct state and local suitability."
+                    )
+            else:
+                loc_notice = {
+                    "te": f"డెమో రిఫరెన్స్ వ్యవసాయ సూచనలు{f' - {loc_district}' if loc_district else ''}; ఇవి శాస్త్రీయంగా ధృవీకరించిన లేదా హామీ ఇచ్చిన సిఫార్సులు కావు. ధృవీకరించిన విత్తనాల లభ్యత, విత్తే సమయం మరియు స్థానిక నేల పరిస్థితులను మీ {loc_officer} లేదా స్థానిక {loc_kvk} తో నిర్ధారించుకోండి.",
+                    "hi": f"डेमो संदर्भ कृषि सुझाव{f' - {loc_district}' if loc_district else ''}; ये वैज्ञानिक रूप से सत्यापित या गारंटीकृत सिफारिशें नहीं हैं। प्रमाणित बीज की उपलब्धता, बुवाई की तारीख और स्थानीय मिट्टी की स्थिति की पुष्टि अपने {loc_officer} या स्थानीय {loc_kvk} से करें।",
+                    "ta": f"மாதிரி குறிப்பு விவசாய ஆலோசனைகள்{f' - {loc_district}' if loc_district else ''}; இவை அறிவியல் ரீதியாக சரிபார்க்கப்பட்ட அல்லது உத்தரவாதமளிக்கப்பட்ட பரிந்துரைகள் அல்ல. விதை கிடைக்கும் தன்மை, விதைப்பு தேதி மற்றும் உள்ளூர் மண் நிலையை உங்கள் {loc_officer} அல்லது உள்ளூர் {loc_kvk} மூலம் உறுதிப்படுத்தவும்.",
+                    "kn": f"ಡೆಮೊ ಉಲ್ಲೇಖ ಕೃಷಿ ಸಲಹೆಗಳು{f' - {loc_district}' if loc_district else ''}; ಇವು ವೈಜ್ಞಾನಿಕವಾಗಿ ಪರಿಶೀಲಿಸಿದ ಅಥವಾ ಖಾತರಿಯ ಶಿಫಾರಸುಗಳಲ್ಲ. ಪ್ರಮಾಣೀಕೃತ ಬೀಜ ಲಭ್ಯತೆ, ಬಿತ್ತನೆ ದಿನಾಂಕ ಮತ್ತು ಸ್ಥಳೀಯ ಮಣ್ಣಿನ ಪರಿಸ್ಥಿತಿಗಳನ್ನು ನಿಮ್ಮ {loc_officer} ಅಥವಾ ಸ್ಥಳೀಯ {loc_kvk} ನಿಂದ ದೃಢೀಕರಿಸಿ.",
+                    "ml": f"ഡെമോ റഫറൻസ് കാർഷിക നിർദ്ദേശങ്ങൾ{f' - {loc_district}' if loc_district else ''}; ഇവ ശാസ്ത്രീയമായി സ്ഥിരീകരിച്ചതോ ഉറപ്പുള്ളതോ ആയ ശുപാർശകളല്ല. സാക്ഷ്യപ്പെടുത്തിയ വിത്ത് ലഭ്യത, വിതയ്ക്കൽ തീയതി, പ്രാദേശിക മണ്ണ് അവസ്ഥ എന്നിവ നിങ്ങളുടെ {loc_officer} അല്ലെങ്കിൽ പ്രാദേശിക {loc_kvk} മായി സ്ഥിരീകരിക്കുക.",
+                    "mr": f"डेमो संदर्भ कृषी सूचना{f' - {loc_district}' if loc_district else ''}; या वैज्ञानिकदृष्ट्या पडताळलेल्या किंवा हमी दिलेल्या शिफारसी नाहीत. प्रमाणित बियाण्यांची उपलब्धता, पेरणीची तारीख आणि स्थानिक जमिनीची स्थिती आपल्या {loc_officer} किंवा स्थानिक {loc_kvk} कडून तपासा.",
+                }
+                disclaimer = loc_notice.get(lang_code, loc_notice["te"])
         else:
             recs = []
-            disclaimer = (
-                f"No specific reference crop matches found for {soil} in {season}{loc_str}. "
-                "Please verify your soil parameters or consult your local Krishi Vigyan Kendra (KVK) for specialized guidance."
-            )
+            if lang_code == "en":
+                disclaimer = (
+                    f"No specific reference crop matches found for {soil} in {season}{loc_str}. "
+                    "Please verify your soil parameters or consult your local Krishi Vigyan Kendra (KVK) for specialized guidance."
+                )
+            else:
+                loc_soil_t = localize_safe(soil, lang_code)
+                loc_season_t = localize_safe(season, lang_code)
+                loc_empty = {
+                    "te": f"{loc_soil_t} నేలకు {loc_season_t} కాలంలో నిర్దిష్ట రిఫరెన్స్ పంటలు కనుగొనబడలేదు. దయచేసి మీ నేల వివరాలను సరిచూసుకోండి లేదా ప్రత్యేక మార్గదర్శకత్వం కోసం స్థానిక {loc_kvk} ను సంప్రదించండి.",
+                    "hi": f"{loc_soil_t} के लिए {loc_season_t} में कोई विशिष्ट संदर्भ फसल नहीं मिली। कृपया अपने मिट्टी के मापदंडों की जांच करें या विशेष मार्गदर्शन के लिए स्थानीय {loc_kvk} से परामर्श करें।",
+                    "ta": f"{loc_soil_t} மண்ணுக்கு {loc_season_t} பருவத்தில் குறிப்பிட்ட குறிப்பு பயிர்கள் எதுவும் கிடைக்கவில்லை. உங்கள் மண் அளவுருக்களை சரிபார்க்கவும் அல்லது சிறப்பு வழிகாட்டுதலுக்கு உள்ளூர் {loc_kvk}-ஐ அணுகவும்.",
+                    "kn": f"{loc_soil_t} ಮಣ್ಣಿಗೆ {loc_season_t} ಹಂಗಾಮಿನಲ್ಲಿ ಯಾವುದೇ ನಿರ್ದಿಷ್ಟ ಉಲ್ಲೇಖ ಬೆಳೆಗಳು ಕಂಡುಬಂದಿಲ್ಲ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಮಣ್ಣಿನ ನಿಯತಾಂಕಗಳನ್ನು ಪರಿಶೀಲಿಸಿ ಅಥವಾ ವಿಶೇಷ ಮಾರ್ಗದರ್ಶನಕ್ಕಾಗಿ ಸ್ಥಳೀಯ {loc_kvk} ಅನ್ನು ಸಂಪರ್ಕಿಸಿ.",
+                    "ml": f"{loc_soil_t} മണ്ണിന് {loc_season_t} കാലത്ത് നിർദ്ദിഷ്ട റഫറൻസ് വിളകളൊന്നും കണ്ടെത്തിയില്ല. ദയവായി നിങ്ങളുടെ മണ്ണ് പാരാമീറ്ററുകൾ പരിശോധിക്കുക അല്ലെങ്കിൽ വിദഗ്ദ്ധ മാർഗ്ഗനിർദ്ദേശത്തിനായി പ്രാദേശിക {loc_kvk}-യുമായി ബന്ധപ്പെടുക.",
+                    "mr": f"{loc_soil_t} मातीसाठी {loc_season_t} हंगामात कोणतेही विशिष्ट संदर्भ पीक आढळले नाही. कृपया आपल्या मातीचे निकष तपासा किंवा विशेष मार्गदर्शनासाठी स्थानिक {loc_kvk} चा सल्ला घ्या.",
+                }
+                disclaimer = loc_empty.get(lang_code, loc_empty["te"])
 
         return CropAdvisorResponse(
             recommendations=recs,
             total_found=len(recs),
-            soil_type=soil,
-            growing_season=season,
-            water_availability=water,
+            soil_type=localize_safe(soil, lang_code),
+            growing_season=localize_safe(season, lang_code),
+            water_availability=localize_safe(water, lang_code),
             disclaimer=disclaimer
         )

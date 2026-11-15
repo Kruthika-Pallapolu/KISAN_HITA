@@ -46,8 +46,11 @@ test('scroll-scrub assets and touch-responsive playback remain enabled with a br
   const css = read('../index.css');
   assert.match(component, /kisan-hita-scroll\.mp4/);
   assert.match(component, /playsInline/);
-  assert.match(runtime, /easeScrollProgress\(this\.current, this\.target, this\.mobile\(\), this\.reducedMotion\(\)\)/);
+  assert.match(runtime, /easeScrollProgress\(this\.current, this\.target, this\.mobile\(\), this\.reducedMotion\(\), elapsedMs\)/);
   assert.match(runtime, /shouldSeekFrame\(seconds, this\.lastSeek, this\.mobile\(\)\)/);
+  assert.match(runtime, /visibilitychange/);
+  assert.match(runtime, /scheduleSeekPoll/);
+  assert.match(runtime, /elapsedMs/);
   assert.match(css, /brightness\(1\.08\) saturate\(1\.08\)/);
   assert.match(css, /max-width: 760px\) and \(orientation: portrait\)/);
 });

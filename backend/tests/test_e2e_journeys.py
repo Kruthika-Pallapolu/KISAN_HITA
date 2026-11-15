@@ -166,17 +166,22 @@ class TestKisanHitaE2EJourneys(unittest.TestCase):
         cfg = config_res.json()
         self.assertFalse(cfg["live_enabled"])
         self.assertTrue(cfg["credits_protected"])
-        self.assertEqual(cfg["provider"], "browser_native_with_local_tts_fallback")
+        self.assertEqual(cfg["provider"], "gnani_voice_providers_disabled")
+        self.assertFalse(cfg["gemini_stt_enabled"])
+        self.assertFalse(cfg["browser_speech_fallback_active"])
         
-        # Test STT with valid WAV
+        # A disabled Prisma route fails explicitly and never falls back to Gemini.
         wav_bytes = generate_mock_wav(0.3)
         b64 = base64.b64encode(wav_bytes).decode("utf-8")
-        with patch.object(sr.Recognizer, "recognize_google", return_value="नमस्ते, मौसम कैसा है?"):
+        original_live = settings.GNANI_LIVE_ENABLED
+        try:
+            settings.GNANI_LIVE_ENABLED = False
             stt_res = self.client.post("/api/voice/stt", json={"audio_base64": b64, "language": "hi"})
-            self.assertEqual(stt_res.status_code, 200)
-            stt_data = stt_res.json()
-            self.assertFalse(stt_data["is_mock"])
-            self.assertGreater(len(stt_data["transcript"]), 0)
+            self.assertEqual(stt_res.status_code, 503)
+            self.assertIn("GNANI_LIVE_ENABLED", stt_res.json()["detail"])
+            self.assertNotIn("transcript", stt_res.json())
+        finally:
+            settings.GNANI_LIVE_ENABLED = original_live
 
     def test_journey_7_multiturn_conversational_slot_filling_api(self):
         """

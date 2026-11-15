@@ -66,6 +66,14 @@ The application follows the visual direction of the supplied reference materials
 
 The interface and farming workflows support Telugu, English, Hindi, Tamil, Kannada, Malayalam, and Marathi. Timbre v3.0 is configurable with Vasudha per language; live provider activation remains controlled by three independent backend switches.
 
+## 🌦️ Weather
+
+Weather uses the live Open-Meteo Forecast API and its Geocoding API. The backend validates state/district membership against the shared `frontend/src/data/indiaAdminLgd.json`, accepts only exact India/state/district geocoding matches, caches verified coordinates for 30 days and forecasts for 10 minutes, and never supplies a sample forecast when provider data is unavailable. A user may explicitly request device location; the browser asks for permission, the current location is reverse-geocoded to an Indian district, and exact GPS coordinates are not saved to a user profile.
+
+Endpoint: `GET /api/weather/current?district=Nellore&state=Andhra%20Pradesh&language=en`; coordinate requests may instead provide `latitude` and `longitude`. The Weather page shows current conditions, hourly and seven-day forecasts, attribution and the provider's CC BY 4.0 licence link.
+
+**Provider limitation:** Open-Meteo's free tier is restricted to non-commercial use and does not provide a production uptime guarantee. Review [Open-Meteo pricing](https://open-meteo.com/en/pricing) and [licence terms](https://open-meteo.com/en/licence) before commercial deployment. Weather responses are forecasts, not official severe-weather warnings. Geocoding coverage can vary; ambiguous or unverified locations return an error rather than nearby-district data.
+
 ---
 
 ## 🏛️ System Architecture
@@ -78,8 +86,8 @@ kiss/
 │   │   ├── database.py
 │   │   ├── main.py
 │   │   ├── models/schemas.py
-│   │   ├── routers/               # auth, assistant, crops, market, voice, settings
-│   │   └── services/              # intent, Gemini, Prisma/Timbre, market, crop services
+│   │   ├── routers/               # auth, assistant, weather, crops, market, voice, settings
+│   │   └── services/              # intent, Open-Meteo weather, Gemini, Prisma/Timbre, market, crop services
 │   ├── data/                      # local illustrative market datasets
 │   ├── tests/
 │   ├── requirements.txt
@@ -159,7 +167,7 @@ These commands run the current checked-in suites; results can vary with code cha
 
 ## 🎙️ Current Voice Providers and Gnani Readiness
 
-- **Voice input**: The assistant uses an explicit foreground `MediaRecorder` recording and multipart upload to `POST /api/voice/stt/upload`; it does not use continuous wake listening. The endpoint validates supported audio formats and duration before provider processing.
+- **Voice input**: The manual assistant microphone uses an explicit foreground `MediaRecorder` recording uploaded to `POST /api/voice/stt/upload`. An optional, separate transcript-based wake-phrase prototype is available only when the browser confirms on-device Web Speech recognition for the selected locale. It requires an explicit start click, the page to remain open, and microphone permission. It does not run in the background or use cloud/server recognition; unsupported browser-language pairs must use Prisma manual recording or text instead. This is not an acoustic wake-word detector. Browser/device support still requires real-device verification.
 - **Prisma STT**: The backend adapter is implemented for the Prisma v3.0 REST contract. Activation requires `GNANI_LIVE_ENABLED=true`, `GNANI_PRISMA_ENABLED=true`, and a backend-only `GNANI_API_KEY`. These switches are false by default in `.env.example`; live provider connectivity has not been verified here.
 - **Timbre TTS**: The backend adapter is implemented for Timbre v3.0. Configure a language-specific `GNANI_TIMBRE_VOICE_*` value (Vasudha is configured in the example for all seven app languages). Activation requires the master and Timbre switches plus the backend-only key. When disabled, the application retains its existing speech output fallback; this does not indicate Timbre audio was generated.
 - **Gemini**: The reasoning provider is configured by `GEMINI_ENABLED`, `GEMINI_API_KEY`, and `GEMINI_MODEL` (default model in code: `gemini-3.1-flash-lite`). Keep the key only in the backend environment. When Gemini is unavailable, the service reports/follows its implemented fallback behavior; no live connectivity is claimed.

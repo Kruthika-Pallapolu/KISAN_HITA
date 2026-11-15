@@ -125,8 +125,8 @@ class TestAnonymousSessionIsolation(unittest.TestCase):
                 "farm_context": {},
             })
             self.assertEqual(second.status_code, 200)
-            self.assertEqual(second.json()["intent"], "general")
-            self.assertIsNone(second.json()["feature_data"])
+            self.assertEqual(second.json()["intent"], "weather")
+            self.assertEqual(second.json()["feature_data"]["status"], "location_required")
 
             history = farmer.get(f"/api/assistant/history/{conversation_id}")
             self.assertEqual(history.status_code, 200)
