@@ -31,26 +31,34 @@ export const ScrollScrubBackground: React.FC = () => {
     const mobileQuery = window.matchMedia('(max-width: 760px), (pointer: coarse)');
 
     const readProgress = () => {
-      const progress = getScrollProgress(window.scrollY, document.documentElement.scrollHeight, window.innerHeight);
+      const scrollY = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+      const scrollHeight = Math.max(
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight,
+        document.documentElement.offsetHeight,
+        window.innerHeight
+      );
+      const innerHeight = window.innerHeight || document.documentElement.clientHeight || 1;
+      const progress = getScrollProgress(scrollY, scrollHeight, innerHeight);
 
       // The original artifact scrubs a charcoal veil over its intro and footer.
       const intro = document.querySelector<HTMLElement>('[data-background-intro]');
       let introOpacity = 0;
       if (intro) {
         const rect = intro.getBoundingClientRect();
-        const top = rect.top + window.scrollY;
-        const start = top - window.innerHeight * 0.8;
-        const end = top + rect.height * 0.5 - window.innerHeight * 0.5;
-        introOpacity = clampProgress((window.scrollY - start) / Math.max(1, end - start)) * 0.34;
+        const top = rect.top + scrollY;
+        const start = top - innerHeight * 0.8;
+        const end = top + rect.height * 0.5 - innerHeight * 0.5;
+        introOpacity = clampProgress((scrollY - start) / Math.max(1, end - start)) * 0.34;
       }
 
       const footer = document.querySelector<HTMLElement>('footer');
       let footerOpacity = 0;
       if (footer) {
-        const top = footer.getBoundingClientRect().top + window.scrollY;
-        const start = top - window.innerHeight;
-        const end = top - window.innerHeight * 0.3;
-        const progress = clampProgress((window.scrollY - start) / Math.max(1, end - start));
+        const top = footer.getBoundingClientRect().top + scrollY;
+        const start = top - innerHeight;
+        const end = top - innerHeight * 0.3;
+        const progress = clampProgress((scrollY - start) / Math.max(1, end - start));
         footerOpacity = (intro ? 0.34 : 0) + (0.72 - (intro ? 0.34 : 0)) * progress;
       }
       veil.style.opacity = String(Math.max(introOpacity, footerOpacity));
@@ -71,9 +79,11 @@ export const ScrollScrubBackground: React.FC = () => {
 
     const onMediaPreferenceChange = () => runtime.refresh();
     const onViewportResize = () => runtime.refresh();
+    const onDocumentScroll = () => runtime.refresh();
     reducedMotionQuery.addEventListener('change', onMediaPreferenceChange);
     mobileQuery.addEventListener('change', onMediaPreferenceChange);
     window.visualViewport?.addEventListener('resize', onViewportResize);
+    document.addEventListener('scroll', onDocumentScroll, { passive: true });
 
     const resizeObserver = typeof ResizeObserver !== 'undefined'
       ? new ResizeObserver(() => runtime.refresh())
@@ -84,6 +94,7 @@ export const ScrollScrubBackground: React.FC = () => {
 
     return () => {
       runtime.destroy();
+      document.removeEventListener('scroll', onDocumentScroll);
       resizeObserver?.disconnect();
       reducedMotionQuery.removeEventListener('change', onMediaPreferenceChange);
       mobileQuery.removeEventListener('change', onMediaPreferenceChange);
