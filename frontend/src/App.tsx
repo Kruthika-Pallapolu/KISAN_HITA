@@ -75,9 +75,6 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="app-shell" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      {/* Reference landscape background, scrubbed by page scroll. */}
-      <ScrollScrubBackground />
-
       {/* Navigation Bar */}
       <Navbar currentTab={currentTab} onSelectTab={handleRouteFeature} />
 
@@ -116,7 +113,7 @@ const AppContent: React.FC = () => {
 const AuthenticatedApp: React.FC = () => {
   const { user, isGuest, guestContextId, loading, continueAsGuest } = useAuth();
   const { hasChosenLanguage } = useLanguage();
-  if (loading) return <div role="status" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--char)', color: 'var(--cream)' }}>Kisan Hita…</div>;
+  if (loading) return <div role="status" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'transparent', color: 'var(--cream)', position: 'relative', zIndex: 1 }}>Kisan Hita…</div>;
   if (!user && !isGuest) return hasChosenLanguage
     ? <AuthPage onContinueGuest={continueAsGuest} />
     : <FirstVisitLanguageSelection />;
@@ -126,7 +123,12 @@ const AuthenticatedApp: React.FC = () => {
 export const App: React.FC = () => {
   return (
     <LanguageProvider>
-      <AuthProvider><AuthenticatedApp /></AuthProvider>
+      <AuthProvider>
+        <div style={{ minHeight: '100vh', position: 'relative' }}>
+          <ScrollScrubBackground />
+          <AuthenticatedApp />
+        </div>
+      </AuthProvider>
     </LanguageProvider>
   );
 };

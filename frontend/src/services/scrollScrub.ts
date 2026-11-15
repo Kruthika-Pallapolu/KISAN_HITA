@@ -109,6 +109,7 @@ export class ScrollScrubRuntime {
     this.events.addEventListener('resize', this.refresh, { passive: true });
     this.events.addEventListener('pageshow', this.refresh);
     this.events.addEventListener('popstate', this.refresh);
+    this.events.addEventListener('hashchange', this.refresh);
     this.visibilityEvents.addEventListener('visibilitychange', this.onVisibilityChange);
 
     this.video.pause();
@@ -142,6 +143,7 @@ export class ScrollScrubRuntime {
     this.events.removeEventListener('resize', this.refresh);
     this.events.removeEventListener('pageshow', this.refresh);
     this.events.removeEventListener('popstate', this.refresh);
+    this.events.removeEventListener('hashchange', this.refresh);
     this.visibilityEvents.removeEventListener('visibilitychange', this.onVisibilityChange);
     this.video.pause();
   }

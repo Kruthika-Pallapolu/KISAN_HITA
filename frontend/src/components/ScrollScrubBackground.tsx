@@ -14,6 +14,19 @@ export const ScrollScrubBackground: React.FC = () => {
     const veil = veilRef.current;
     if (!video || !veil) return;
 
+    video.defaultMuted = true;
+    video.muted = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+
+    if (typeof video.load === 'function' && video.readyState === 0) {
+      try {
+        video.load();
+      } catch {
+        // Safe fallback
+      }
+    }
+
     const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     const mobileQuery = window.matchMedia('(max-width: 760px), (pointer: coarse)');
 
@@ -85,6 +98,8 @@ export const ScrollScrubBackground: React.FC = () => {
         className="scroll-scrub-background__video"
         src={VIDEO_URL}
         poster={POSTER_URL}
+        autoPlay
+        loop
         muted
         playsInline
         preload="metadata"
