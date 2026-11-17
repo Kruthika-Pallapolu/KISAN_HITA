@@ -1,4 +1,3 @@
-# 🌾 KISAN HITA
 
 <h1 align="center">🌾 KISAN HITA</h1>
 
